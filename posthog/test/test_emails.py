@@ -3156,6 +3156,101 @@ def test_a_send_now_answer_within_a_minute_goes_out_now(_name, fields, ahead):
     assert (result.id, result.status, result.scheduled_at) == ("msg_9", "queued", None)
 
 
+class MovingClock:
+    def __init__(self) -> None:
+        self.now = NOW
+
+    def advance(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+@contextmanager
+def moving_clock():
+    clock = MovingClock()
+    with mock.patch("posthog.emails._now", side_effect=lambda: clock.now):
+        yield clock
+
+
+class SlowAdapter(FakeAdapter):
+    def __init__(
+        self, replies: list[Reply], clock: MovingClock, seconds: float
+    ) -> None:
+        super().__init__(replies)
+        self.clock = clock
+        self.seconds = seconds
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        self.clock.advance(self.seconds)
+        return super().send(request, **kwargs)
+
+
+def emails_on_a_slow_line(
+    replies: list[Reply], clock: MovingClock, seconds: float
+) -> Emails:
+    session = requests.Session()
+    session.mount("https://", SlowAdapter(replies, clock, seconds))
+    return Emails(SECRET_KEY, session=session)
+
+
+def test_a_send_now_answer_counts_from_the_first_attempt_not_the_answer():
+    with moving_clock() as clock:
+        emails = emails_on_a_slow_line(
+            [accepted("msg_9", status="queued", scheduled_at=None)], clock, 3
+        )
+
+        with pytest.raises(EmailError) as raised:
+            send(emails, scheduled_at=NOW + timedelta(seconds=62))
+
+    assert (raised.value.code, raised.value.message_id) == (
+        "schedule_not_confirmed",
+        "msg_9",
+    )
+
+
+def test_a_send_now_answer_after_a_retry_counts_from_the_first_attempt(no_sleep):
+    with moving_clock() as clock:
+        no_sleep.side_effect = lambda _seconds: clock.advance(30)
+        emails, adapter = emails_with(
+            [
+                rejected(503, "delivery_unavailable"),
+                accepted("msg_9", status="queued", scheduled_at=None),
+            ]
+        )
+
+        result = send(emails, scheduled_at=NOW + timedelta(seconds=58))
+
+    assert len(adapter.requests) == 2
+    assert (result.id, result.status, result.scheduled_at) == ("msg_9", "queued", None)
+
+
+@pytest.mark.asyncio
+async def test_async_send_now_answer_counts_from_the_first_attempt_not_the_answer():
+    with moving_clock() as clock:
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            clock.advance(3)
+            return httpx.Response(
+                202,
+                json={"message_id": "msg_9", "status": "queued", "scheduled_at": None},
+            )
+
+        emails = AsyncEmails(
+            SECRET_KEY,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+
+        with pytest.raises(EmailError) as raised:
+            await emails.send(
+                to="user@example.com",
+                template_id=TEMPLATE_ID,
+                scheduled_at=NOW + timedelta(seconds=62),
+            )
+
+    assert raised.value.code == "schedule_not_confirmed"
+
+
 @parameterized.expand(
     [
         ("nothing_but_the_id", {}),

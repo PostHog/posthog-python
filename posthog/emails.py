@@ -123,8 +123,9 @@ millisecond, so the email never goes out early. A result with ``status``
 ``"scheduled"`` carries the confirmed ``scheduled_at``; ``get`` reads
 ``scheduled`` until the email goes out. A time that has already passed sends
 the email now, and the result's ``status`` is ``"queued"``. The client accepts
-that answer only for a time at most 60 seconds ahead of its clock: for a time
-further ahead it raises ``schedule_not_confirmed``, so an email PostHog didn't
+that answer only for a time at most 60 seconds ahead of its clock at the send's
+first attempt, however long the answer or a retry takes: for a time further
+ahead it raises ``schedule_not_confirmed``, so an email PostHog didn't
 schedule never reads as scheduled or sent on time. Compute the time
 once and reuse it on your own retries: the idempotency key covers it, so the
 same key with another time raises ``idempotency_key_reused``. To stop scheduled
@@ -1105,6 +1106,8 @@ def _json_object(body: bytes) -> dict[str, Any]:
 
 
 def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
+    first_attempt = _now()
+
     def parse(
         status: int, body: bytes, retry_after_header: Optional[str]
     ) -> SendEmailResult:
@@ -1125,7 +1128,7 @@ def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
             return result
         if _confirms_schedule(fields, scheduled_at):
             return replace(result, scheduled_at=scheduled_at)
-        if _sends_now(fields) and scheduled_at - _now() <= _SEND_NOW_LEEWAY:
+        if _sends_now(fields) and scheduled_at - first_attempt <= _SEND_NOW_LEEWAY:
             return result
         raise _schedule_not_confirmed(message_id, status)
 
@@ -1646,7 +1649,8 @@ class Emails(_EmailsBase):
                 client's host isn't PostHog Cloud, and
                 ``schedule_not_confirmed`` when PostHog accepted the email
                 without confirming the time, or answered that it goes out now
-                for a time more than 60 seconds ahead of the client's clock.
+                for a time more than 60 seconds ahead of the client's clock
+                at the first attempt.
                 ``message_id`` then
                 names the email, which may go out at another time.
             TypeError, ValueError: An argument has the wrong type or format,
