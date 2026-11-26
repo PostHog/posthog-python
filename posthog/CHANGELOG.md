@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.8 — 2026-11-26
+
+### Patch changes
+
+- [d569130a](https://github.com/posthog/posthog-python/commit/d569130acf358daa555a5ab331ca1d5bbc624d9c) Local flag evaluation treats a filter type it cannot evaluate, such as a cohort's `person_metadata` filter on first seen, as inconclusive instead of matching it against a person property with the same key. A later condition can still decide the flag, and otherwise it falls back to `/flags`. — Thanks @srednoff888-art for your first contribution 🎉!
+
 ## 8.2.7 — 2026-11-25
 
 ### Patch changes
