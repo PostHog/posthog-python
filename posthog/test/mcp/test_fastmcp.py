@@ -197,23 +197,59 @@ async def test_analytics_flush_sends_its_captures():
     assert client.event_counts_at_flush == [len(client.events)]
 
 
-async def test_analytics_flush_logs_a_failed_client_flush():
-    class FailingFlushClient(FakeClient):
-        def flush(self, timeout_seconds=10):
-            raise RuntimeError("network down")
+class _FailingFlushClient(FakeClient):
+    def flush(self, timeout_seconds=10):
+        raise RuntimeError("network down")
 
+
+def _fail_thread_start(self):
+    raise RuntimeError("can't start new thread")
+
+
+@pytest.mark.parametrize(
+    "client_class, thread_start, expected_log",
+    [
+        (_FailingFlushClient, None, "network down"),
+        (FakeClient, _fail_thread_start, "can't start new thread"),
+    ],
+    ids=["client flush raises", "thread start raises"],
+)
+async def test_analytics_flush_logs_instead_of_raising(
+    monkeypatch, client_class, thread_start, expected_log
+):
+    if thread_start is not None:
+        monkeypatch.setattr(threading.Thread, "start", thread_start)
     lines = []
     try:
         analytics = instrument(
-            make_server(),
-            FailingFlushClient(),
-            MCPAnalyticsOptions(logger=lines.append),
+            make_server(), client_class(), MCPAnalyticsOptions(logger=lines.append)
         )
         await analytics.flush()
     finally:
         set_logger(None)
 
-    assert any("network down" in line for line in lines)
+    assert any(expected_log in line for line in lines)
+
+
+async def test_cancelled_analytics_flush_leaves_the_worker_quiet(monkeypatch):
+    release = threading.Event()
+    finished = threading.Event()
+    thread_errors = []
+    monkeypatch.setattr(threading, "excepthook", thread_errors.append)
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+            finished.set()
+
+    analytics = instrument(make_server(), StalledFlushClient())
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(analytics.flush(), 0.05)
+    release.set()
+    assert finished.wait(timeout=2)
+    await asyncio.sleep(0.05)
+
+    assert thread_errors == []
 
 
 async def test_analytics_flush_leaves_the_default_executor_free():

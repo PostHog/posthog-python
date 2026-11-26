@@ -125,6 +125,9 @@ class McpEventSink:
         # per call keeps it out of any shared pool, so a stalled flush never delays
         # another flush or the loop's default executor, and no pool outlives a fork.
         done: concurrent.futures.Future[None] = concurrent.futures.Future()
+        # A running future ignores cancel(), so cancelling this await can't make
+        # the worker's set_result() raise.
+        done.set_running_or_notify_cancel()
 
         def run() -> None:
             try:
@@ -133,8 +136,8 @@ class McpEventSink:
             except BaseException as err:
                 done.set_exception(err)
 
-        threading.Thread(target=run, name="posthog-mcp-flush", daemon=True).start()
         try:
+            threading.Thread(target=run, name="posthog-mcp-flush", daemon=True).start()
             await asyncio.wrap_future(done)
         except Exception as err:
             log(f"Failed to flush PostHog events: {err}")
