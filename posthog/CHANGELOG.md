@@ -1,5 +1,11 @@
 # posthog
 
+## 8.3.0 — 2026-11-26
+
+### Minor changes
+
+- [e104bb8a](https://github.com/posthog/posthog-python/commit/e104bb8abcce613811921fe52a816d9ef3471a03) `McpAnalytics.flush()`, on the handle `instrument()` returns, now flushes the posthog client after it waits for in-flight MCP captures, so the captured events are sent. It never raises: a failed client flush is logged. On a per-request runtime, `await analytics.flush()` alone is enough; you no longer need a separate `posthog.flush()`. — Thanks @lucasheriques!
+
 ## 8.2.8 — 2026-11-26
 
 ### Patch changes
