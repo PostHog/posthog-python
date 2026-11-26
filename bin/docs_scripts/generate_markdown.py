@@ -87,6 +87,74 @@ for kind in ("functions", "classes", "attributes"):
     )
 
 
+def fold_parameter_tables(md: str) -> str:
+    """Fold 4-column parameter tables into 2 columns (Name | Description)."""
+    out, in_params = [], False
+    for line in md.splitlines():
+        if line == "Name | Type | Description | Default":
+            out.append("Name | Description")
+            in_params = True
+            continue
+        if in_params:
+            if line.startswith("---- |"):
+                out.append("---- | -----------")
+                continue
+            if not line.strip() or not line.startswith("`"):
+                in_params = False
+            else:
+                parts = re.split(r"(?<!\\) \| ", line)
+                if len(parts) == 4:
+                    name, typ, desc, default = (p.strip() for p in parts)
+                    cells = []
+                    if typ:
+                        cells.append(f"{typ}.")
+                    if desc:
+                        if default and desc[-1] not in ".!?:":
+                            desc += "."
+                        cells.append(desc)
+                    if default == "*required*":
+                        cells.append("Required.")
+                    elif default:
+                        cells.append(f"Default: {default}.")
+                    out.append(f"{name} | {' '.join(cells)}")
+                    continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def unwrap_prose(md: str) -> str:
+    """Join hard-wrapped lines inside prose paragraphs and bullet items."""
+    out, in_fence = [], False
+    for line in md.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        stripped = line.strip()
+        is_special = (
+            not stripped
+            or stripped.startswith(("#", "|", "<", "**", "Bases:", "----"))
+            or " | " in line
+            or bool(re.match(r"^(?:[-*]|\d+\.) ", stripped))
+        )
+        prev = out[-1] if out else ""
+        prev_stripped = prev.strip()
+        prev_is_joinable = (
+            bool(prev_stripped)
+            and not prev_stripped.startswith(("#", "|", "<", "**", "Bases:", "----"))
+            and " | " not in prev
+            and not prev.lstrip().startswith("```")
+        )
+        if not is_special and prev_is_joinable:
+            out[-1] = f"{prev.rstrip()} {stripped}"
+        else:
+            out.append(line)
+    return "\n".join(out)
+
+
 def entry(obj, name: str) -> str:
     template = ENV.get_template(f"{obj.kind.value}.md.jinja")
     md = template.render(**griffe2md.prepare_context(obj, CONFIG))
@@ -98,6 +166,8 @@ def entry(obj, name: str) -> str:
     md = re.sub(r"^(`\w+` \|  \| .*) \| \*required\*$", r"\1 | ", md, flags=re.M)
     # An unannotated function's Returns row starts with " | ", which GFM shifts into Type.
     md = re.sub(r"(Type \| Description\n---- \| -----------\n) \| ", r"\1- | ", md)
+    md = fold_parameter_tables(md)
+    md = unwrap_prose(md)
     return re.sub(r"^### .*$", f"### `{name}`", md.strip(), count=1, flags=re.M)
 
 

@@ -32,13 +32,13 @@ class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
     Place this after ``AuthenticationMiddleware`` in Django's ``MIDDLEWARE`` list so
-    authenticated ``request.user`` identity and email are available. For Django REST
-    Framework handled API exceptions, also configure ``posthog.integrations.drf.exception_handler``.
+    ``request.user`` identity and email are available. In Django REST Framework apps,
+    pair it with ``posthog.integrations.drf.exception_handler`` to capture handled API errors.
 
-    This middleware reads ``request.user`` before your view runs. On login or signup
-    requests where ``django.contrib.auth.login()`` runs inside the view, call
-    ``identify_context(str(user.pk))`` (or use ``user_logged_in``) so later events in
-    that request link to the authenticated user.
+    The middleware reads ``request.user`` before your view runs. After calling
+    ``django.contrib.auth.login()`` in a login or signup view, call
+    ``identify_context(str(user.pk))`` or hook ``user_logged_in`` so events in that
+    request attach to the user.
 
     This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
     - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)

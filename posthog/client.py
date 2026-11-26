@@ -1333,10 +1333,12 @@ class Client(object):
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
-                local evaluation when ``secret_key`` is configured.
+                local evaluation when ``secret_key`` is configured with a
+                [personal API key](https://app.posthog.com/settings/user-api-keys) or
+                [project secret API key](https://app.posthog.com/settings/environment-secret-api-keys).
             flag_definition_cache_provider: Optional external cache provider for
-                sharing feature flag definitions across workers (for example
-                Redis) rather than polling in each worker.
+                sharing feature flag definitions across workers, such as in Redis,
+                rather than polling in each worker.
             capture_exception_code_variables: Capture local variable values on
                 exception stack frames.
             capture_trace_context: When OpenTelemetry is installed and a valid span is
@@ -1953,8 +1955,8 @@ class Client(object):
         """
         Decorator that creates a new context for the wrapped function using this client.
 
-        Supports sync and ``async def`` functions, and should sit closest to the
-        function when stacking decorators.
+        Works on both sync and ``async def`` functions. Put ``scoped`` closest to
+        the function when stacking decorators.
 
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
@@ -1972,9 +1974,12 @@ class Client(object):
         """
         Add a tag to the current context.
 
-        Tags attach as event ``properties`` (overriding ``super_properties``,
-        overridden by explicit ``properties``). Calling ``set()`` or ``set_once()``
-        in the context also folds active tags into ``$set`` or ``$set_once``.
+        Every event and exception captured in this context includes this key-value
+        pair in its ``properties``. Calling ``set()`` or ``set_once()`` in the
+        context also saves active tags as person properties.
+
+        If the same key appears in multiple places, explicit ``properties`` on the
+        call win over context tags, and context tags win over ``super_properties``.
 
         Args:
             name: The tag key.
@@ -2034,10 +2039,13 @@ class Client(object):
         """
         Identify the current context with a distinct ID.
 
-        Python 8 has no ``identify()`` method, so call this inside ``new_context()``
-        to attribute ``capture()``, ``capture_exception()``, ``evaluate_flags()``, and
-        ``start_span()`` calls to the user. Events outside an identified context
-        without an explicit ``distinct_id`` send as personless.
+        In Python SDK ``6.0.0`` and later, user identification uses the
+        [contexts](/docs/libraries/python#posthognew_context) pattern rather than a
+        separate ``identify()`` method.
+
+        Call this method inside ``new_context()``, and every event, exception, flag
+        evaluation, and span in that context is automatically tagged with this
+        ``distinct_id``.
 
         Args:
             distinct_id: The distinct ID to associate with the current context and its children.
@@ -2052,7 +2060,7 @@ class Client(object):
         Set the session ID for the current context.
 
         Session IDs must be valid UUIDv7 strings, such as ``X-POSTHOG-SESSION-ID``
-        forwarded from PostHog JS.
+        from PostHog JS.
 
         Args:
             session_id: The session ID to associate with the current context and its children.
@@ -2342,12 +2350,12 @@ class Client(object):
         """
         Captures an event manually. [Learn about capture best practices](https://posthog.com/docs/product-analytics/capture-events)
 
-        Events with a ``distinct_id`` (explicit or from ``identify_context()``)
-        create or update a person profile. Pass ``$set`` or ``$set_once`` inside
-        ``properties`` (or call ``set()`` / ``set_once()``), since Python 8 has no
-        ``identify()`` method. Events without a ``distinct_id`` send as personless,
-        or pass ``options={"process_person_profile": False}`` for a known
-        ``distinct_id``.
+        Set special properties and identity behavior with their dedicated methods or options:
+
+        - **User identity.** Pass ``distinct_id`` on this call, or call ``identify_context()`` inside ``new_context()`` to tag every event in the block.
+        - **Person properties.** Call ``set()`` or ``set_once()``, or pass ``$set`` and ``$set_once`` inside ``properties``.
+        - **Groups.** Pass ``groups={"company": "company_id"}`` to link the event to a group, and call ``group_identify()`` to set properties on that group.
+        - **Personless events.** Omit ``distinct_id`` outside an identified context, or pass ``options={"process_person_profile": False}`` when supplying a ``distinct_id``.
 
         Args:
             event: The event name to capture.
@@ -2424,9 +2432,10 @@ class Client(object):
         """Capture an AI event on the dedicated AI capture endpoint.
 
         Beta: the signature is stable; operational limits (per-event size
-        cap, batching, endpoint) may change without notice. For OpenAI,
-        Anthropic, Gemini, LangChain, and OpenTelemetry, prefer the
-        ``posthog.ai`` wrappers over building ``$ai_*`` payloads by hand.
+        cap, batching, endpoint) may change without notice.
+
+        Use the ``posthog.ai`` wrappers for OpenAI, Anthropic, Gemini, LangChain,
+        and OpenTelemetry rather than building ``$ai_*`` payloads by hand.
 
         Takes the same arguments and returns the same value as `capture()`:
         the event UUID, or None when the event was not admitted (disabled
@@ -2633,9 +2642,9 @@ class Client(object):
         """
         Set properties on a person profile.
 
-        Falls back to ``identify_context()`` when ``distinct_id`` is omitted, and
-        returns ``None`` without sending if no distinct ID or properties/tags exist.
-        Active context tags fold into ``$set`` properties.
+        Uses ``identify_context()`` when ``distinct_id`` is omitted, and folds
+        active context tags into ``$set``. Without a distinct ID or at least one
+        property, the call sends nothing and returns ``None``.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -2693,8 +2702,8 @@ class Client(object):
         """
         Set properties on a person profile only if they haven't been set before.
 
-        Behaves like ``set()``, including context ``distinct_id`` fallback and tag
-        folding into ``$set_once``, without overwriting existing person properties.
+        Follows the same context ``distinct_id`` and tag rules as ``set()``, without
+        overwriting existing person properties.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -2921,11 +2930,13 @@ class Client(object):
         """
         Capture an exception for error tracking. Never raises, even when ``debug=True``.
 
-        Duplicate calls on the same exception instance send only one event. Contexts
-        autocapture only uncaught exceptions escaping ``new_context()``, so call
-        ``capture_exception()`` manually when catching and swallowing an error.
-        Passing ``None`` reads ``sys.exc_info()``. Returns the event UUID, or ``None``
-        if skipped or dropped.
+        Duplicate calls on the same exception instance send only one event.
+
+        Contexts only autocapture uncaught exceptions escaping ``new_context()``, so
+        call ``capture_exception()`` manually when catching and handling an error
+        gracefully. Passing ``None`` reads ``sys.exc_info()``.
+
+        Returns the event UUID, or ``None`` if skipped or dropped.
 
         When OpenTelemetry is installed and a valid span is active, its trace and
         span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
@@ -5686,10 +5697,15 @@ class Client(object):
 
         Local evaluation is transparent: when the poller resolves a flag, the
         snapshot's ``$feature_flag_called`` events are tagged ``locally_evaluated=True``
-        and reason ``"Evaluated locally"``. Pass ``flags=flags.only_accessed()`` to
-        ``capture()`` to attach only flags read via ``is_enabled()`` or ``get_flag()``
-        before that call, or ``flags=flags.only([...])`` for specific keys.
-        ``get_flag_payload()`` doesn't mark a flag accessed or emit
+        and reason ``"Evaluated locally"``.
+
+        Scope which evaluated flags attach to ``capture()`` with these helpers:
+
+        - ``capture(..., flags=flags)`` attaches every evaluated flag in the snapshot.
+        - ``capture(..., flags=flags.only_accessed())`` attaches only flags read via ``is_enabled()`` or ``get_flag()`` before that call.
+        - ``capture(..., flags=flags.only(["flag-key"]))`` attaches only the listed flag keys.
+
+        Calling ``get_flag_payload()`` doesn't mark a flag accessed or emit
         ``$feature_flag_called``.
 
         Args:
@@ -5698,8 +5714,8 @@ class Client(object):
             groups: Mapping of group type to group key.
             person_properties: Person properties for conditions not yet ingested or
                 overridden locally.
-            group_properties: Group properties keyed by group type (not group key),
-                e.g. ``{"company": {"plan": "enterprise"}}``.
+            group_properties: Group properties keyed by group type rather than group key,
+                such as ``{"company": {"plan": "enterprise"}}``.
             only_evaluate_locally: If True, never fall back to remote evaluation —
                 flags that can't be evaluated locally are omitted from the snapshot and
                 listed with a reason in its ``unresolved_flags``.

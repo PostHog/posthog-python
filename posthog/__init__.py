@@ -110,11 +110,11 @@ def new_context(
     """
     Create a new context scope that will be active for the duration of the with block.
 
-    Contexts use ``contextvars``, so state carries across function calls and ``await``
-    within the current execution flow, while new threads start without context. Child
-    contexts inherit parent state and override keys locally without mutating the parent.
-    Pass ``fresh=True`` at request or background-job boundaries to clear inherited state,
-    and note that explicit arguments on ``capture()`` always win over context state.
+    Contexts store shared identity, session ID, options, and tags in ``contextvars``:
+
+    - **Propagation.** State carries across function calls and ``await`` automatically. New threads start with an empty context.
+    - **Inheritance.** Child contexts inherit parent values without mutating the parent. Pass ``fresh=True`` at request or job boundaries to clear inherited state.
+    - **Precedence.** Explicit arguments on ``capture()`` override context state, and context state overrides ``super_properties``.
 
     Args:
         fresh: Whether to start with a fresh context (default: False)
@@ -164,8 +164,7 @@ def set_context_session(session_id: str):
     """
     Set the session ID for the current context.
 
-    Session IDs must be valid UUIDv7 strings, such as an ``X-POSTHOG-SESSION-ID`` header
-    forwarded from PostHog JS so backend events link to the matching Session Replay timeline.
+    Session IDs must be valid UUIDv7 strings. Forward PostHog JS's ``X-POSTHOG-SESSION-ID`` header here to link backend events to Session Replay.
 
     Args:
         session_id: The session ID to associate with the current context and its children
@@ -173,7 +172,7 @@ def set_context_session(session_id: str):
     Examples:
         ```python
         from posthog import set_context_session
-        set_context_session("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")
+        set_context_session("session_123")
         ```
 
     Category:

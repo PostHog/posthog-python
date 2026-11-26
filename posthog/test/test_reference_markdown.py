@@ -98,3 +98,27 @@ def test_unannotated_returns_gets_a_placeholder_type(pkg):
 def test_drf_helpers_are_in_utils():
     assert "integrations.drf.exception_handler" in generator.UTILS
     assert "integrations.drf.create_exception_handler" in generator.UTILS
+
+
+def test_parameter_tables_fold_type_and_default_into_two_columns(pkg):
+    cls = pkg["client.Client"]
+    generator.clean(cls)
+    md = generator.entry(cls.members["__init__"], "Client(...)")
+    assert "Name | Description\n---- | -----------" in md
+    assert "Name | Type | Description | Default" not in md
+    assert "`project_api_key` | `str`. PostHog project API key/token. Required." in md
+    assert (
+        "`flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]`."
+        in md
+    )
+    assert "Default: `None`." in md
+
+
+def test_prose_paragraphs_unwrap_hard_line_breaks(pkg):
+    cls = pkg["client.Client"]
+    generator.clean(cls)
+    md = generator.entry(cls.members["identify_context"], "Client.identify_context")
+    assert (
+        "uses the [contexts](/docs/libraries/python#posthognew_context) pattern rather than a separate `identify()` method."
+        in md
+    )

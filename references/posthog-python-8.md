@@ -155,61 +155,61 @@ Initialize a new PostHog client instance.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`project_api_key` | `str` | PostHog project API key/token. | *required*
-`host` |  | PostHog host. Defaults to the US ingestion endpoint when not set. App hosts such as `https://us.posthog.com` are mapped to the corresponding ingestion host. | `None`
-`debug` |  | Enable verbose SDK logging and re-raise errors from public API methods. | `False`
-`max_queue_size` |  | Maximum number of analytics events buffered before upload. AI events use `capture_ai_max_queue_size`. | `10000`
-`send` |  | If False, queueing succeeds but events are not sent. | `True`
-`on_error` |  | Optional callback `(error, batch)` invoked when an upload fails: by background consumers, or on the calling thread in `sync_mode`. Capture failures arrive as `CaptureError`. Without it, each failed batch logs one aggregate line. A capture that fails inside the callback logs that line instead of calling it again. Keep it short and non-blocking. Calling lifecycle methods directly is safe and deferred, but do not start another thread or task that calls `flush()`, `join()`, or `shutdown()` and then wait for it from the callback. | `None`
-`flush_at` |  | Number of queued events that triggers a batch upload. | `100`
-`flush_interval` |  | Maximum seconds a background consumer waits before flushing a partial batch. | `5.0`
-`max_retries` |  | Number of upload retries. Values below 0 are treated as 0. | `3`
-`sync_mode` |  | If True, send each event synchronously instead of using background worker threads. This blocks the calling thread; in asyncio applications such as FastAPI, use `AsyncPosthog` instead. | `False`
-`timeout` | `float` | HTTP request timeout in seconds for event uploads. | `15`
-`thread` |  | Number of background consumer threads. | `1`
-`poll_interval` |  | Seconds between local feature flag definition refreshes. | `30`
-`secret_key` |  | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. For example, `posthog.Client(project_api_key, secret_key="phx_...")`. | `None`
-`personal_api_key` |  | Deprecated alias for `secret_key`. Still honored for backwards compatibility; prefer `secret_key`, which also accepts a Project Secret API Key. | `None`
-`disabled` |  | If True, disable captures and API requests. Useful in tests. | `False`
-`disable_geoip` |  | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. Set `$ip` in event properties to geolocate from a client IP. | `True`
-`is_server` |  | Whether events are emitted from a server-side runtime. Defaults to True; set to False when using the SDK as a client/CLI so the device OS is attributed to the person normally. Events get `$is_server` only when the event, context tags and `super_properties` leave it unset. | `True`
-`historical_migration` |  | Mark events as historical migration imports. Pass past `timestamp` values on those `capture()` calls. | `False`
-`feature_flags_request_timeout_seconds` | `float` | Timeout in seconds for feature flag and remote config requests. | `3`
-`feature_flags_request_max_retries` |  | Number of retries for feature flag requests after network, transport, or timeout failures. Defaults to 1. Set to 0 to disable retries. | `1`
-`app_host` | `Optional[str]` | Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. | `None`
-`email_request_timeout_seconds` | `float` | Timeout in seconds for each email send request. Defaults to 15. | `15`
-`email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
-`migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
-`super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`. | `None`
-`enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
-`log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
-`project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
-`privacy_mode` |  | For AI observability, capture usage metadata without prompt inputs or outputs. | `False`
-`enable_full_ai_capture` |  | Capture full AI content in PostHog AI wrapper events: skips string truncation and passes media (base64/data URIs) through unredacted. `privacy_mode` always wins. Wrapper events use the AI capture endpoint whether or not this is set. Defaults to False. | `False`
-`before_send` |  | Optional callback that can modify or drop events before upload. Return `None` to drop an event. Context tags, context options, `super_properties`, `super_options` and the values the SDK adds, such as `$is_server`, `$geoip_disable` and `$os`, fill in before it runs, so it can change or remove them. If `before_send` raises or returns a non-dict, the SDK logs the error and drops the event. A hook returning a new dict must copy `event["options"]` to preserve capture options. | `None`
-`flag_fallback_cache_url` |  | Optional feature flag fallback cache URL, such as `memory://local/?ttl=300&size=10000` or a Redis URL. | `None`
-`enable_local_evaluation` |  | Whether to poll feature flag definitions for local evaluation when `secret_key` is configured. | `True`
-`flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]` | Optional external cache provider for sharing feature flag definitions across workers (for example Redis) rather than polling in each worker. | `None`
-`capture_exception_code_variables` |  | Capture local variable values on exception stack frames. | `False`
-`capture_trace_context` |  | When OpenTelemetry is installed and a valid span is active at capture time, add its trace and span IDs as `$trace_id` and `$span_id` properties to events captured with `capture()` and `capture_ai()`, so they can be correlated with backend traces. They fill after context tags and `super_properties`, before `before_send`. A `$trace_id` or `$span_id` from the event, a context tag or `super_properties` stops the SDK adding either ID. Exception events (`capture_exception`) always attach these IDs regardless of this setting. Defaults to False. | `False`
-`traces` | `Optional[dict]` | Config dict for distributed tracing. Non-empty string values for `service.name`, `service.version` and `deployment.environment` in `resource_attributes` take precedence over `service_name`, `service_version` and `environment`, respectively. Options include `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. The span dict has `name`, `kind`, `status`, `attributes`, `events`, `start_time_ns`, `end_time_ns`, `trace_id`, `span_id` and `parent_span_id`, and its attributes are plain Python values. The hook runs after `posthogDistinctId` and `sessionId` are attached, so it can scrub them. It must be a regular function. An `async` hook drops every span. In a list of hooks, the first one to return `None` stops the chain. An entry that isn't callable turns tracing off for the client. Past a per-span cap, the earliest attributes and events are kept and the span reports how many were dropped. `posthogDistinctId` and `sessionId` don't count toward the attribute cap and are never dropped. `max_attribute_value_length` also applies to strings nested in lists and dictionaries. All caps are applied again after `before_span_send`. Spans beyond `max_queue_size` are dropped. An invalid value falls back to its default with a warning. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
-`code_variables_mask_patterns` |  | Variable-name patterns to mask when capturing code variables. | `None`
-`code_variables_ignore_patterns` |  | Variable-name patterns to omit when capturing code variables. | `None`
-`code_variables_mask_url_credentials` |  | Scrub credentials embedded in URLs/DSNs (e.g. `user:pass@host`) from captured code variables, regardless of the surrounding variable name. Defaults to True. | `None`
-`code_variables_detect_secrets` |  | Last-resort entropy-based detection that redacts high-entropy secret-looking values (API keys, tokens, strong passwords) sitting in innocuously-named variables, after the name and URL checks. Skips structured ids (UUIDs, ObjectIds, hashes). Defaults to True. | `None`
-`in_app_modules` | `list[str] \| None` | Module/package prefixes treated as in-app frames in captured exceptions. | `None`
-`enable_exception_autocapture_rate_limiting` |  | Rate limit autocaptured exceptions client-side with a token bucket per exception type. Disabled by default. | `False`
-`exception_autocapture_bucket_size` |  | Maximum burst of autocaptured exceptions allowed per exception type (token bucket size, clamped to 0-100). | `DEFAULT_BUCKET_SIZE`
-`exception_autocapture_refill_rate` |  | Tokens restored per refill interval for each exception type's bucket. | `DEFAULT_REFILL_RATE`
-`exception_autocapture_refill_interval_seconds` |  | Seconds between token refills for autocaptured exception rate limiting. | `DEFAULT_REFILL_INTERVAL_SECONDS`
-`capture_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture()` uploads. `CaptureCompression.GZIP`, `DEFLATE` or `ZSTD` (or the strings `"gzip"`, `"deflate"` or `"zstd"`). `ZSTD` needs `pip install posthog[zstd]`. When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. | `None`
-`capture_ai_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture_ai()` uploads, set independently of `capture_compression`. Defaults to no compression, and the env var does not apply. `CaptureCompression.ZSTD` suits large AI payloads. | `None`
-`capture_ai_max_queue_size` | `int` | Maximum number of AI events buffered before upload. Defaults to 1000, lower than `max_queue_size` because AI events are much larger. | `1000`
-`capture_ai_timeout` | `float` | Seconds allowed for one AI upload request. Defaults to 30, longer than `timeout` because AI batches are much larger. | `30`
-`capture_ai_max_event_bytes` | `int` | Largest serialized AI event the SDK sends; a larger one is dropped with an error log. Defaults to the AI endpoint's ceiling plus envelope headroom, and may only be lowered. | `AI_MAX_MSG_SIZE`
+Name | Description
+---- | -----------
+`project_api_key` | `str`. PostHog project API key/token. Required.
+`host` | PostHog host. Defaults to the US ingestion endpoint when not set. App hosts such as `https://us.posthog.com` are mapped to the corresponding ingestion host. Default: `None`.
+`debug` | Enable verbose SDK logging and re-raise errors from public API methods. Default: `False`.
+`max_queue_size` | Maximum number of analytics events buffered before upload. AI events use `capture_ai_max_queue_size`. Default: `10000`.
+`send` | If False, queueing succeeds but events are not sent. Default: `True`.
+`on_error` | Optional callback `(error, batch)` invoked when an upload fails: by background consumers, or on the calling thread in `sync_mode`. Capture failures arrive as `CaptureError`. Without it, each failed batch logs one aggregate line. A capture that fails inside the callback logs that line instead of calling it again. Keep it short and non-blocking. Calling lifecycle methods directly is safe and deferred, but do not start another thread or task that calls `flush()`, `join()`, or `shutdown()` and then wait for it from the callback. Default: `None`.
+`flush_at` | Number of queued events that triggers a batch upload. Default: `100`.
+`flush_interval` | Maximum seconds a background consumer waits before flushing a partial batch. Default: `5.0`.
+`max_retries` | Number of upload retries. Values below 0 are treated as 0. Default: `3`.
+`sync_mode` | If True, send each event synchronously instead of using background worker threads. This blocks the calling thread; in asyncio applications such as FastAPI, use `AsyncPosthog` instead. Default: `False`.
+`timeout` | `float`. HTTP request timeout in seconds for event uploads. Default: `15`.
+`thread` | Number of background consumer threads. Default: `1`.
+`poll_interval` | Seconds between local feature flag definition refreshes. Default: `30`.
+`secret_key` | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. For example, `posthog.Client(project_api_key, secret_key="phx_...")`. Default: `None`.
+`personal_api_key` | Deprecated alias for `secret_key`. Still honored for backwards compatibility; prefer `secret_key`, which also accepts a Project Secret API Key. Default: `None`.
+`disabled` | If True, disable captures and API requests. Useful in tests. Default: `False`.
+`disable_geoip` | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. Set `$ip` in event properties to geolocate from a client IP. Default: `True`.
+`is_server` | Whether events are emitted from a server-side runtime. Defaults to True; set to False when using the SDK as a client/CLI so the device OS is attributed to the person normally. Events get `$is_server` only when the event, context tags and `super_properties` leave it unset. Default: `True`.
+`historical_migration` | Mark events as historical migration imports. Pass past `timestamp` values on those `capture()` calls. Default: `False`.
+`feature_flags_request_timeout_seconds` | `float`. Timeout in seconds for feature flag and remote config requests. Default: `3`.
+`feature_flags_request_max_retries` | Number of retries for feature flag requests after network, transport, or timeout failures. Defaults to 1. Set to 0 to disable retries. Default: `1`.
+`app_host` | `Optional[str]`. Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. Default: `None`.
+`email_request_timeout_seconds` | `float`. Timeout in seconds for each email send request. Defaults to 15. Default: `15`.
+`email_request_max_retries` | `int`. Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. Default: `2`.
+`migrated_from` | `Optional[str]`. The email provider you moved from, such as `"resend"`. `emails` sends it with every request. Default: `None`.
+`super_properties` | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. Default: `None`.
+`super_options` | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`. Default: `None`.
+`enable_exception_autocapture` | Automatically capture uncaught exceptions. Default: `False`.
+`log_captured_exceptions` | Also log exceptions captured by error tracking. Default: `False`.
+`project_root` | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. Default: `None`.
+`privacy_mode` | For AI observability, capture usage metadata without prompt inputs or outputs. Default: `False`.
+`enable_full_ai_capture` | Capture full AI content in PostHog AI wrapper events: skips string truncation and passes media (base64/data URIs) through unredacted. `privacy_mode` always wins. Wrapper events use the AI capture endpoint whether or not this is set. Defaults to False. Default: `False`.
+`before_send` | Optional callback that can modify or drop events before upload. Return `None` to drop an event. Context tags, context options, `super_properties`, `super_options` and the values the SDK adds, such as `$is_server`, `$geoip_disable` and `$os`, fill in before it runs, so it can change or remove them. If `before_send` raises or returns a non-dict, the SDK logs the error and drops the event. A hook returning a new dict must copy `event["options"]` to preserve capture options. Default: `None`.
+`flag_fallback_cache_url` | Optional feature flag fallback cache URL, such as `memory://local/?ttl=300&size=10000` or a Redis URL. Default: `None`.
+`enable_local_evaluation` | Whether to poll feature flag definitions for local evaluation when `secret_key` is configured with a [personal API key](https://app.posthog.com/settings/user-api-keys) or [project secret API key](https://app.posthog.com/settings/environment-secret-api-keys). Default: `True`.
+`flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]`. Optional external cache provider for sharing feature flag definitions across workers, such as in Redis, rather than polling in each worker. Default: `None`.
+`capture_exception_code_variables` | Capture local variable values on exception stack frames. Default: `False`.
+`capture_trace_context` | When OpenTelemetry is installed and a valid span is active at capture time, add its trace and span IDs as `$trace_id` and `$span_id` properties to events captured with `capture()` and `capture_ai()`, so they can be correlated with backend traces. They fill after context tags and `super_properties`, before `before_send`. A `$trace_id` or `$span_id` from the event, a context tag or `super_properties` stops the SDK adding either ID. Exception events (`capture_exception`) always attach these IDs regardless of this setting. Defaults to False. Default: `False`.
+`traces` | `Optional[dict]`. Config dict for distributed tracing. Non-empty string values for `service.name`, `service.version` and `deployment.environment` in `resource_attributes` take precedence over `service_name`, `service_version` and `environment`, respectively. Options include `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. The span dict has `name`, `kind`, `status`, `attributes`, `events`, `start_time_ns`, `end_time_ns`, `trace_id`, `span_id` and `parent_span_id`, and its attributes are plain Python values. The hook runs after `posthogDistinctId` and `sessionId` are attached, so it can scrub them. It must be a regular function. An `async` hook drops every span. In a list of hooks, the first one to return `None` stops the chain. An entry that isn't callable turns tracing off for the client. Past a per-span cap, the earliest attributes and events are kept and the span reports how many were dropped. `posthogDistinctId` and `sessionId` don't count toward the attribute cap and are never dropped. `max_attribute_value_length` also applies to strings nested in lists and dictionaries. All caps are applied again after `before_span_send`. Spans beyond `max_queue_size` are dropped. An invalid value falls back to its default with a warning. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. Default: `None`.
+`code_variables_mask_patterns` | Variable-name patterns to mask when capturing code variables. Default: `None`.
+`code_variables_ignore_patterns` | Variable-name patterns to omit when capturing code variables. Default: `None`.
+`code_variables_mask_url_credentials` | Scrub credentials embedded in URLs/DSNs (e.g. `user:pass@host`) from captured code variables, regardless of the surrounding variable name. Defaults to True. Default: `None`.
+`code_variables_detect_secrets` | Last-resort entropy-based detection that redacts high-entropy secret-looking values (API keys, tokens, strong passwords) sitting in innocuously-named variables, after the name and URL checks. Skips structured ids (UUIDs, ObjectIds, hashes). Defaults to True. Default: `None`.
+`in_app_modules` | `list[str] \| None`. Module/package prefixes treated as in-app frames in captured exceptions. Default: `None`.
+`enable_exception_autocapture_rate_limiting` | Rate limit autocaptured exceptions client-side with a token bucket per exception type. Disabled by default. Default: `False`.
+`exception_autocapture_bucket_size` | Maximum burst of autocaptured exceptions allowed per exception type (token bucket size, clamped to 0-100). Default: `DEFAULT_BUCKET_SIZE`.
+`exception_autocapture_refill_rate` | Tokens restored per refill interval for each exception type's bucket. Default: `DEFAULT_REFILL_RATE`.
+`exception_autocapture_refill_interval_seconds` | Seconds between token refills for autocaptured exception rate limiting. Default: `DEFAULT_REFILL_INTERVAL_SECONDS`.
+`capture_compression` | `Optional[Union[CaptureCompression, str]]`. Request-body compression for `capture()` uploads. `CaptureCompression.GZIP`, `DEFLATE` or `ZSTD` (or the strings `"gzip"`, `"deflate"` or `"zstd"`). `ZSTD` needs `pip install posthog[zstd]`. When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. Default: `None`.
+`capture_ai_compression` | `Optional[Union[CaptureCompression, str]]`. Request-body compression for `capture_ai()` uploads, set independently of `capture_compression`. Defaults to no compression, and the env var does not apply. `CaptureCompression.ZSTD` suits large AI payloads. Default: `None`.
+`capture_ai_max_queue_size` | `int`. Maximum number of AI events buffered before upload. Defaults to 1000, lower than `max_queue_size` because AI events are much larger. Default: `1000`.
+`capture_ai_timeout` | `float`. Seconds allowed for one AI upload request. Defaults to 30, longer than `timeout` because AI batches are much larger. Default: `30`.
+`capture_ai_max_event_bytes` | `int`. Largest serialized AI event the SDK sends; a larger one is dropped with an error log. Defaults to the AI endpoint's ceiling plus envelope headroom, and may only be lowered. Default: `AI_MAX_MSG_SIZE`.
 
 **Examples:**
 
@@ -229,27 +229,27 @@ capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Captures an event manually. [Learn about capture best practices](https://posthog.com/docs/product-analytics/capture-events)
 
-Events with a `distinct_id` (explicit or from `identify_context()`)
-create or update a person profile. Pass `$set` or `$set_once` inside
-`properties` (or call `set()` / `set_once()`), since Python 8 has no
-`identify()` method. Events without a `distinct_id` send as personless,
-or pass `options={"process_person_profile": False}` for a known
-`distinct_id`.
+Set special properties and identity behavior with their dedicated methods or options:
+
+- **User identity.** Pass `distinct_id` on this call, or call `identify_context()` inside `new_context()` to tag every event in the block.
+- **Person properties.** Call `set()` or `set_once()`, or pass `$set` and `$set_once` inside `properties`.
+- **Groups.** Pass `groups={"company": "company_id"}` to link the event to a group, and call `group_identify()` to set properties on that group.
+- **Personless events.** Omit `distinct_id` outside an identified context, or pass `options={"process_person_profile": False}` when supplying a `distinct_id`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`event` | `str` | The event name to capture. | *required*
-`distinct_id` |  | The distinct ID of the user. | 
-`properties` |  | A dictionary of properties to include with the event. | 
-`timestamp` |  | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
-`uuid` |  | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
-`groups` |  | A dictionary of group information. It merges into a `$groups` property and wins key by key. | 
-`flags` |  | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request. | 
-`send_feature_flags` |  | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event. | 
-`disable_geoip` |  | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
+Name | Description
+---- | -----------
+`event` | `str`. The event name to capture. Required.
+`distinct_id` | The distinct ID of the user.
+`properties` | A dictionary of properties to include with the event.
+`timestamp` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC.
+`uuid` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
+`groups` | A dictionary of group information. It merges into a `$groups` property and wins key by key.
+`flags` | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request.
+`send_feature_flags` | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event.
+`disable_geoip` | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it.
+`options` | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID.
 
 **Examples:**
 
@@ -294,20 +294,18 @@ set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 
 Set properties on a person profile.
 
-Falls back to `identify_context()` when `distinct_id` is omitted, and
-returns `None` without sending if no distinct ID or properties/tags exist.
-Active context tags fold into `$set` properties.
+Uses `identify_context()` when `distinct_id` is omitted, and folds active context tags into `$set`. Without a distinct ID or at least one property, the call sends nothing and returns `None`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` |  | The distinct ID of the user. | 
-`properties` |  | A dictionary of properties to set. | 
-`timestamp` |  | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
-`uuid` |  | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
-`disable_geoip` |  | Whether to disable GeoIP for this event. | 
-`options` |  | Capture options for this event, sent as given. `process_person_profile` defaults to `True`. | 
+Name | Description
+---- | -----------
+`distinct_id` | The distinct ID of the user.
+`properties` | A dictionary of properties to set.
+`timestamp` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC.
+`uuid` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
+`disable_geoip` | Whether to disable GeoIP for this event.
+`options` | Capture options for this event, sent as given. `process_person_profile` defaults to `True`.
 
 **Examples:**
 
@@ -326,19 +324,18 @@ set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 
 Set properties on a person profile only if they haven't been set before.
 
-Behaves like `set()`, including context `distinct_id` fallback and tag
-folding into `$set_once`, without overwriting existing person properties.
+Follows the same context `distinct_id` and tag rules as `set()`, without overwriting existing person properties.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` |  | The distinct ID of the user. | 
-`properties` |  | A dictionary of properties to set once. | 
-`timestamp` |  | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
-`uuid` |  | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
-`disable_geoip` |  | Whether to disable GeoIP for this event. | 
-`options` |  | Capture options for this event, sent as given. `process_person_profile` defaults to `True`. | 
+Name | Description
+---- | -----------
+`distinct_id` | The distinct ID of the user.
+`properties` | A dictionary of properties to set once.
+`timestamp` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC.
+`uuid` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
+`disable_geoip` | Whether to disable GeoIP for this event.
+`options` | Capture options for this event, sent as given. `process_person_profile` defaults to `True`.
 
 **Examples:**
 
@@ -358,28 +355,20 @@ start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mappin
 
 Start a span for distributed tracing. Alpha.
 
-The span API is experimental and can change in a minor release. Spans
-already sent are kept; the SDK API isn't frozen yet.
+The span API is experimental and can change in a minor release. Spans already sent are kept; the SDK API isn't frozen yet.
 
-Returns a span handle. Use it as a context manager to make it the active
-span for the block and end it on exit (recording a raised exception on
-the way out); or call `end()` yourself for a span that cannot wrap a
-block. Spans started inside the block nest under it automatically.
-Always returns a usable handle, even when tracing is off, so calling
-code never branches. At `max_live_spans` open spans, the SDK first
-evicts spans open longer than `max_span_age` seconds, which are never
-exported. If it is still at the limit, the returned span isn't recorded.
+Returns a span handle. Use it as a context manager to make it the active span for the block and end it on exit (recording a raised exception on the way out); or call `end()` yourself for a span that cannot wrap a block. Spans started inside the block nest under it automatically. Always returns a usable handle, even when tracing is off, so calling code never branches. At `max_live_spans` open spans, the SDK first evicts spans open longer than `max_span_age` seconds, which are never exported. If it is still at the limit, the returned span isn't recorded.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`name` | `str` | A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. | *required*
-`kind` | `Optional[str]` | `internal` (default), `server`, `client`, `producer` or `consumer`. | `None`
-`attributes` | `Optional[Mapping[str, Any]]` | Initial attributes. | `None`
-`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. The active span is tracked with `contextvars`, so it carries across `await`. Threads don't reliably inherit it, so pass `parent=span` in a thread or a `ThreadPoolExecutor` task. A malformed `traceparent` starts a new trace and doesn't raise. A continued trace propagates the sampled flag it received. PostHog doesn't sample, so the span is exported whichever way the flag is set. | `None`
-`tracestate` | `Optional[str]` | The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. | `None`
-`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. PostHog clamps a start time more than 24 hours old to the receive time. | `None`
+Name | Description
+---- | -----------
+`name` | `str`. A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. Required.
+`kind` | `Optional[str]`. `internal` (default), `server`, `client`, `producer` or `consumer`. Default: `None`.
+`attributes` | `Optional[Mapping[str, Any]]`. Initial attributes. Default: `None`.
+`parent` | `Union[Span, str, None]`. A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. The active span is tracked with `contextvars`, so it carries across `await`. Threads don't reliably inherit it, so pass `parent=span` in a thread or a `ThreadPoolExecutor` task. A malformed `traceparent` starts a new trace and doesn't raise. A continued trace propagates the sampled flag it received. PostHog doesn't sample, so the span is exported whichever way the flag is set. Default: `None`.
+`tracestate` | `Optional[str]`. The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. Default: `None`.
+`start_time` | `Union[datetime, float, None]`. A `datetime` or epoch seconds, to backdate the span. PostHog clamps a start time more than 24 hours old to the receive time. Default: `None`.
 
 **Examples:**
 
@@ -401,9 +390,7 @@ get_active_span() -> Optional[Span]
 
 The span that is active in the current context, or `None`. Alpha.
 
-Only entering a span (`with posthog.start_span(...) as span:`) makes
-it active; a span started manually is not. Use it to propagate the
-trace to the next service: `span.traceparent()` is the header value.
+Only entering a span (`with posthog.start_span(...) as span:`) makes it active; a span started manually is not. Use it to propagate the trace to the next service: `span.traceparent()` is the header value.
 
 **Examples:**
 
@@ -427,14 +414,14 @@ Never alias users to a shared placeholder ID such as `"anonymous"`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`previous_id` | `ID_TYPES` | The previous distinct ID. Required - the call is dropped with a warning if it is missing or empty. | *required*
-`distinct_id` | `Optional[str]` | The new distinct ID to alias to. Required - the call is dropped with a warning if it is missing or empty. The context distinct ID is never used here. | *required*
-`timestamp` | `Optional[Union[datetime, str]]` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
-`uuid` | `Optional[str]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
+Name | Description
+---- | -----------
+`previous_id` | `ID_TYPES`. The previous distinct ID. Required - the call is dropped with a warning if it is missing or empty. Required.
+`distinct_id` | `Optional[str]`. The new distinct ID to alias to. Required - the call is dropped with a warning if it is missing or empty. The context distinct ID is never used here. Required.
+`timestamp` | `Optional[Union[datetime, str]]`. The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. Default: `None`.
+`uuid` | `Optional[str]`. A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this event. Default: `None`.
+`options` | `Optional[Dict[str, Any]]`. Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. Default: `None`.
 
 **Examples:**
 
@@ -454,17 +441,11 @@ capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Capture an AI event on the dedicated AI capture endpoint.
 
-Beta: the signature is stable; operational limits (per-event size
-cap, batching, endpoint) may change without notice. For OpenAI,
-Anthropic, Gemini, LangChain, and OpenTelemetry, prefer the
-`posthog.ai` wrappers over building `$ai_*` payloads by hand.
+Beta: the signature is stable; operational limits (per-event size cap, batching, endpoint) may change without notice.
 
-Takes the same arguments and returns the same value as `capture()`:
-the event UUID, or None when the event was not admitted (disabled
-client, or dropped by `before_send`). The event is queued on an
-isolated AI lane with its own consumer pool and a higher per-event
-size cap, posting to the dedicated AI ingestion endpoint. The payload
-is sent as given — no redaction or truncation is applied here.
+Use the `posthog.ai` wrappers for OpenAI, Anthropic, Gemini, LangChain, and OpenTelemetry rather than building `$ai_*` payloads by hand.
+
+Takes the same arguments and returns the same value as `capture()`: the event UUID, or None when the event was not admitted (disabled client, or dropped by `before_send`). The event is queued on an isolated AI lane with its own consumer pool and a higher per-event size cap, posting to the dedicated AI ingestion endpoint. The payload is sent as given — no redaction or truncation is applied here.
 
 ## Capture exception
 
@@ -476,27 +457,25 @@ capture_exception(exception: Optional[ExceptionArg], *, level: Optional[str] = N
 
 Capture an exception for error tracking. Never raises, even when `debug=True`.
 
-Duplicate calls on the same exception instance send only one event. Contexts
-autocapture only uncaught exceptions escaping `new_context()`, so call
-`capture_exception()` manually when catching and swallowing an error.
-Passing `None` reads `sys.exc_info()`. Returns the event UUID, or `None`
-if skipped or dropped.
+Duplicate calls on the same exception instance send only one event.
 
-When OpenTelemetry is installed and a valid span is active, its trace and
-span IDs are added as `$trace_id` and `$span_id` event properties,
-unless the event, a context tag or `super_properties` sets either one.
+Contexts only autocapture uncaught exceptions escaping `new_context()`, so call `capture_exception()` manually when catching and handling an error gracefully. Passing `None` reads `sys.exc_info()`.
+
+Returns the event UUID, or `None` if skipped or dropped.
+
+When OpenTelemetry is installed and a valid span is active, its trace and span IDs are added as `$trace_id` and `$span_id` event properties, unless the event, a context tag or `super_properties` sets either one.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`exception` | `Optional[ExceptionArg]` | The exception to capture, or `None` to read `sys.exc_info()`. | *required*
-`level` | `Optional[str]` | The `$exception_level`, such as `"warning"` or `"fatal"`. Defaults to `"error"`. An unknown value counts as unset. | `None`
-`distinct_id` |  | The distinct ID of the user. | 
-`properties` |  | A dictionary of additional properties. Reserved exception properties, such as `$exception_list` and `$exception_level`, are ignored. | 
-`flags` |  | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. Attaches those exact flag values to the captured `$exception` event. | 
-`send_feature_flags` |  | Deprecated. Pass `flags` from `evaluate_flags()` instead. | 
-`disable_geoip` |  | Whether to disable GeoIP for this event. | 
+Name | Description
+---- | -----------
+`exception` | `Optional[ExceptionArg]`. The exception to capture, or `None` to read `sys.exc_info()`. Required.
+`level` | `Optional[str]`. The `$exception_level`, such as `"warning"` or `"fatal"`. Defaults to `"error"`. An unknown value counts as unset. Default: `None`.
+`distinct_id` | The distinct ID of the user.
+`properties` | A dictionary of additional properties. Reserved exception properties, such as `$exception_list` and `$exception_level`, are ignored.
+`flags` | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. Attaches those exact flag values to the captured `$exception` event.
+`send_feature_flags` | Deprecated. Pass `flags` from `evaluate_flags()` instead.
+`disable_geoip` | Whether to disable GeoIP for this event.
 
 **Examples:**
 
@@ -516,14 +495,9 @@ except Exception as e:
 emails: Emails
 ```
 
-Send transactional email from PostHog email templates or from content
-in your code, and read the status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `transactional_email:write`
-scope. Sends go to `app_host`, or to the PostHog Cloud app host of
-`host`. `email_request_timeout_seconds` and `email_request_max_retries`
-configure each send. A disabled or shut-down client sends nothing. See
-`posthog.emails` for setup.
+Needs `secret_key`, a project secret API key with the `transactional_email:write` scope. Sends go to `app_host`, or to the PostHog Cloud app host of `host`. `email_request_timeout_seconds` and `email_request_max_retries` configure each send. A disabled or shut-down client sends nothing. See `posthog.emails` for setup.
 
 **Examples:**
 
@@ -546,22 +520,15 @@ flush(timeout_seconds: Optional[float] = 10) -> None
 
 Attempt immediate delivery of queued events, ended spans and autocaptured metrics, keeping the client reusable.
 
-For a client shared across requests or serverless invocations (including
-the module-level client), call `flush()` before a short-lived invocation
-returns. Use `shutdown()` instead only for final process cleanup or when
-disposing of a client that will not be reused. Flush does not stop the
-background workers or feature flag poller, and does not end open spans.
+For a client shared across requests or serverless invocations (including the module-level client), call `flush()` before a short-lived invocation returns. Use `shutdown()` instead only for final process cleanup or when disposing of a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.
 
-Returning does not guarantee server receipt: pending work can remain after
-a timeout or span export failure, and failed events may be dropped by the
-consumers. Calls made directly from SDK callbacks such as `on_error` are
-deferred rather than blocking the worker that invoked the callback.
+Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by the consumers. Calls made directly from SDK callbacks such as `on_error` are deferred rather than blocking the worker that invoked the callback.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`timeout_seconds` | `Optional[float]` | Seconds to wait for event queues to drain, shared across event lanes. Defaults to 10 seconds. Pass `None` to wait without a time limit; this does not guarantee successful delivery. Queued spans flush concurrently. The span exporter waits up to this many seconds for an in-flight flush, then uses a fresh drain budget once it acquires the lock. If the lock wait times out, the in-flight flush is left to finish. At least one span request is attempted after acquiring the lock, even with no budget left; retriable failures are retried after backoff while budget remains, with one last attempt at the deadline. Each span request is bounded by the client's `timeout` in seconds, and the last request is not cut short. This is therefore not a strict wall-clock limit for the whole call. With `None`, a retriable span failure is left for a later flush rather than retried within this call. | `10`
+Name | Description
+---- | -----------
+`timeout_seconds` | `Optional[float]`. Seconds to wait for event queues to drain, shared across event lanes. Defaults to 10 seconds. Pass `None` to wait without a time limit; this does not guarantee successful delivery. Queued spans flush concurrently. The span exporter waits up to this many seconds for an in-flight flush, then uses a fresh drain budget once it acquires the lock. If the lock wait times out, the in-flight flush is left to finish. At least one span request is attempted after acquiring the lock, even with no budget left; retriable failures are retried after backoff while budget remains, with one last attempt at the deadline. Each span request is bounded by the client's `timeout` in seconds, and the last request is not cut short. This is therefore not a strict wall-clock limit for the whole call. With `None`, a retriable span failure is left for a later flush rather than retried within this call. Default: `10`.
 
 **Examples:**
 
@@ -581,23 +548,21 @@ get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[st
 
 Get multivariate feature flag value for a user.
 
-`get_feature_flag` is deprecated and will be removed in a future major version. Use
-`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
-consolidates flag evaluation into a single `/flags` request per incoming request.
+`get_feature_flag` is deprecated and will be removed in a future major version. Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`send_feature_flag_events` | `bool` | Whether to send feature flag events. | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send feature flag events. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -619,24 +584,22 @@ get_feature_flag_payload(key: str, distinct_id: ID_TYPES, *, match_value: Option
 
 Get the payload for a feature flag.
 
-`get_feature_flag_payload` is deprecated and will be removed in a future major version. Use
-`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead. This
-consolidates flag evaluation into a single `/flags` request per incoming request.
+`get_feature_flag_payload` is deprecated and will be removed in a future major version. Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead. This consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`match_value` | `Optional[FlagValue]` | The specific flag value to get payload for. | `None`
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`send_feature_flag_events` | `bool` | Deprecated. Use get_feature_flag() instead if you need events. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`match_value` | `Optional[FlagValue]`. The specific flag value to get payload for. Default: `None`.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Deprecated. Use get_feature_flag() instead if you need events. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Returns:**
 
@@ -663,12 +626,7 @@ if flags.is_enabled('flag-key'):
 get_feature_flag_result(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
 ```
 
-Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
-depending on whether local evaluation is enabled and the flag can be locally evaluated.
-This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
-When the flag was evaluated remotely and its config version 2 record is a complete experiment
-split (an experiment rule with a rule ID and a variant key), it also captures the
-`$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
+Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely depending on whether local evaluation is enabled and the flag can be locally evaluated. This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`. When the flag was evaluated remotely and its config version 2 record is a complete experiment split (an experiment rule with a rule ID and a variant key), it also captures the `$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
 **Examples:**
 
@@ -682,17 +640,17 @@ if flag_result and flag_result.get_value() == 'variant-key':
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`send_feature_flag_events` | `bool` | Whether to send feature flag events. | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send feature flag events. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Returns:**
 
@@ -712,15 +670,15 @@ Get feature flag variants for a user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 ### `Client.get_all_flags`
 
@@ -732,16 +690,16 @@ Get all feature flags for a user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -761,15 +719,15 @@ Get feature flags and payloads for a user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -787,16 +745,16 @@ Get all feature flags and their payloads for a user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -812,35 +770,32 @@ posthog.get_all_flags_and_payloads('distinct_id_of_your_user')
 evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[List[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 ```
 
-Evaluate all feature flags for a user in a single call and return a
-`FeatureFlagEvaluations` snapshot. Branch on `.is_enabled()` /
-`.get_flag()` and pass the same snapshot to `capture` via the
-`flags` option so events carry the exact flag values the code branched on.
+Evaluate all feature flags for a user in a single call and return a `FeatureFlagEvaluations` snapshot. Branch on `.is_enabled()` / `.get_flag()` and pass the same snapshot to `capture` via the `flags` option so events carry the exact flag values the code branched on.
 
-Prefer this over repeated `get_feature_flag()` calls and over
-`capture(send_feature_flags=True)` — it consolidates flag evaluation into
-a single `/flags` request per incoming request.
+Prefer this over repeated `get_feature_flag()` calls and over `capture(send_feature_flags=True)` — it consolidates flag evaluation into a single `/flags` request per incoming request.
 
-Local evaluation is transparent: when the poller resolves a flag, the
-snapshot's `$feature_flag_called` events are tagged `locally_evaluated=True`
-and reason `"Evaluated locally"`. Pass `flags=flags.only_accessed()` to
-`capture()` to attach only flags read via `is_enabled()` or `get_flag()`
-before that call, or `flags=flags.only([...])` for specific keys.
-`get_flag_payload()` doesn't mark a flag accessed or emit
-`$feature_flag_called`.
+Local evaluation is transparent: when the poller resolves a flag, the snapshot's `$feature_flag_called` events are tagged `locally_evaluated=True` and reason `"Evaluated locally"`.
+
+Scope which evaluated flags attach to `capture()` with these helpers:
+
+- `capture(..., flags=flags)` attaches every evaluated flag in the snapshot.
+- `capture(..., flags=flags.only_accessed())` attaches only flags read via `is_enabled()` or `get_flag()` before that call.
+- `capture(..., flags=flags.only(["flag-key"]))` attaches only the listed flag keys.
+
+Calling `get_flag_payload()` doesn't mark a flag accessed or emit `$feature_flag_called`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `Optional[ID_TYPES]` | The user's distinct ID. If `None`, falls back to the context distinct_id. If still unresolvable, returns an empty snapshot. | `None`
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties for conditions not yet ingested or overridden locally. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type (not group key), e.g. `{"company": {"plan": "enterprise"}}`. | `None`
-`only_evaluate_locally` | `bool` | If True, never fall back to remote evaluation — flags that can't be evaluated locally are omitted from the snapshot and listed with a reason in its `unresolved_flags`. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
-`flag_keys` | `Optional[List[str]]` | Optional list that scopes local evaluation, the underlying `/flags` request, and the returned snapshot. When omitted or `None`, all flags are evaluated. An empty list returns an empty snapshot without evaluating flags. A requested key absent from loaded local definitions is included in one remote fallback per `evaluate_flags` call unless `only_evaluate_locally` is True. If the server also does not know the key, it is omitted from the snapshot. | `None`
-`device_id` | `Optional[str]` | Optional device ID override. If not provided, falls back to the context device_id (which may be set via tracing headers). Used by experience-continuity flags to match users across distinct_id changes. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `Optional[ID_TYPES]`. The user's distinct ID. If `None`, falls back to the context distinct_id. If still unresolvable, returns an empty snapshot. Default: `None`.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Mapping of group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties for conditions not yet ingested or overridden locally. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties keyed by group type rather than group key, such as `{"company": {"plan": "enterprise"}}`. Default: `None`.
+`only_evaluate_locally` | `bool`. If True, never fall back to remote evaluation — flags that can't be evaluated locally are omitted from the snapshot and listed with a reason in its `unresolved_flags`. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`flag_keys` | `Optional[List[str]]`. Optional list that scopes local evaluation, the underlying `/flags` request, and the returned snapshot. When omitted or `None`, all flags are evaluated. An empty list returns an empty snapshot without evaluating flags. A requested key absent from loaded local definitions is included in one remote fallback per `evaluate_flags` call unless `only_evaluate_locally` is True. If the server also does not know the key, it is omitted from the snapshot. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override. If not provided, falls back to the context device_id (which may be set via tracing headers). Used by experience-continuity flags to match users across distinct_id changes. Default: `None`.
 
 **Returns:**
 
@@ -870,22 +825,20 @@ group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, A
 
 Identify a group and set its properties.
 
-Requires the Group Analytics add-on. Pass `name` in `properties` to set
-the group's display name in PostHog, and pass `groups={group_type: group_key}`
-on `capture()` to link events to the group.
+Requires the Group Analytics add-on. Pass `name` in `properties` to set the group's display name in PostHog, and pass `groups={group_type: group_key}` on `capture()` to link events to the group.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`group_type` | `str` | The type of group (e.g., 'company', 'team'). Required - the call is dropped with a warning if it is missing or empty. | *required*
-`group_key` | `str` | The unique identifier for the group. Required - the call is dropped with a warning if it is missing or empty. | *required*
-`properties` | `Optional[Dict[str, Any]]` | A dictionary of properties to set on the group. | `None`
-`timestamp` | `Optional[Union[datetime, str]]` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
-`uuid` | `Optional[Union[str, UUID]]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
-`distinct_id` | `Optional[ID_TYPES]` | The distinct ID of the user performing the action. Falls back to the context distinct ID, then to `$<group_type>_<group_key>`. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
+Name | Description
+---- | -----------
+`group_type` | `str`. The type of group (e.g., 'company', 'team'). Required - the call is dropped with a warning if it is missing or empty. Required.
+`group_key` | `str`. The unique identifier for the group. Required - the call is dropped with a warning if it is missing or empty. Required.
+`properties` | `Optional[Dict[str, Any]]`. A dictionary of properties to set on the group. Default: `None`.
+`timestamp` | `Optional[Union[datetime, str]]`. The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. Default: `None`.
+`uuid` | `Optional[Union[str, UUID]]`. A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this event. Default: `None`.
+`distinct_id` | `Optional[ID_TYPES]`. The distinct ID of the user performing the action. Falls back to the context distinct ID, then to `$<group_type>_<group_key>`. Default: `None`.
+`options` | `Optional[Dict[str, Any]]`. Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. Default: `None`.
 
 **Examples:**
 
@@ -908,23 +861,21 @@ feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str
 
 Check if a feature flag is enabled for a user.
 
-`feature_enabled` is deprecated and will be removed in a future major version. Use
-`posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
-consolidates flag evaluation into a single `/flags` request per incoming request.
+`feature_enabled` is deprecated and will be removed in a future major version. Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`only_evaluate_locally` | `bool` | Whether to only evaluate locally. | `False`
-`send_feature_flag_events` | `bool` | Whether to send feature flag events. | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to only evaluate locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send feature flag events. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -946,9 +897,7 @@ join() -> None
 
 Attempt to process queued events and end the consumer threads. Do not use directly, call `shutdown()` instead.
 
-Failed or undrainable events may be dropped and reported through logging
-or `on_error`; returning does not guarantee server receipt. Lifecycle
-cleanup is attempted once, and cleanup failures are logged without retry.
+Failed or undrainable events may be dropped and reported through logging or `on_error`; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry.
 
 **Examples:**
 
@@ -964,30 +913,9 @@ shutdown() -> None
 
 Attempt final delivery and permanently shut down the client.
 
-Call this for final process cleanup or when disposing of a client that
-will not be reused. It closes capture lanes, stops background workers and
-the feature flag poller, and tears down integrations. Do not call it at the
-end of each request or serverless invocation when the client is shared;
-call `flush()` before returning instead. A shut-down client cannot be
-reused; create a new client if needed.
+Call this for final process cleanup or when disposing of a client that will not be reused. It closes capture lanes, stops background workers and the feature flag poller, and tears down integrations. Do not call it at the end of each request or serverless invocation when the client is shared; call `flush()` before returning instead. A shut-down client cannot be reused; create a new client if needed.
 
-Normally this method blocks until queued events have been attempted and
-cleanup finishes. Failed or undrainable events may be dropped and
-reported through logging or `on_error`; returning does not guarantee
-server receipt. Event draining has no timeout. Queued spans get one final
-flush with up to 30 seconds waiting for an in-flight flush, then a fresh
-30-second drain budget; the last HTTP request is not cut short. Any spans
-it cannot send are discarded with a warning, as are spans still open.
-A script that exits without calling `shutdown()` gets only a brief
-best-effort span flush, so don't rely on it.
-Lifecycle cleanup is attempted once, and cleanup failures
-are logged without retry. When called directly from an SDK callback such as
-`on_error`, shutdown is deferred to avoid blocking the worker that
-invoked the callback. If the callback must coordinate a blocking
-shutdown, have it signal an
-application-owned thread and return before that thread calls shutdown.
-Do not wait inside the callback for another thread or task that calls a
-lifecycle method.
+Normally this method blocks until queued events have been attempted and cleanup finishes. Failed or undrainable events may be dropped and reported through logging or `on_error`; returning does not guarantee server receipt. Event draining has no timeout. Queued spans get one final flush with up to 30 seconds waiting for an in-flight flush, then a fresh 30-second drain budget; the last HTTP request is not cut short. Any spans it cannot send are discarded with a warning, as are spans still open. A script that exits without calling `shutdown()` gets only a brief best-effort span flush, so don't rely on it. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry. When called directly from an SDK callback such as `on_error`, shutdown is deferred to avoid blocking the worker that invoked the callback. If the callback must coordinate a blocking shutdown, have it signal an application-owned thread and return before that thread calls shutdown. Do not wait inside the callback for another thread or task that calls a lifecycle method.
 
 **Examples:**
 
@@ -1005,9 +933,7 @@ load_feature_flags()
 
 Load feature flags for local evaluation.
 
-Requires `secret_key`. Fetches definitions synchronously on the calling
-thread, and starts background polling every `poll_interval` seconds when
-`enable_local_evaluation=True`.
+Requires `secret_key`. Fetches definitions synchronously on the calling thread, and starts background polling every `poll_interval` seconds when `enable_local_evaluation=True`.
 
 **Examples:**
 
@@ -1057,10 +983,10 @@ Create a new context for managing shared state. Learn more about [contexts](/doc
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`fresh` |  | Whether to create a fresh context that doesn't inherit from parent. | `False`
-`capture_exceptions` | `Optional[bool]` | Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting. | `None`
+Name | Description
+---- | -----------
+`fresh` | Whether to create a fresh context that doesn't inherit from parent. Default: `False`.
+`capture_exceptions` | `Optional[bool]`. Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting. Default: `None`.
 
 **Examples:**
 
@@ -1078,15 +1004,14 @@ scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 
 Decorator that creates a new context for the wrapped function using this client.
 
-Supports sync and `async def` functions, and should sit closest to the
-function when stacking decorators.
+Works on both sync and `async def` functions. Put `scoped` closest to the function when stacking decorators.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`fresh` |  | Whether to create a fresh context that doesn't inherit from parent. | `False`
-`capture_exceptions` | `Optional[bool]` | Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting. | `None`
+Name | Description
+---- | -----------
+`fresh` | Whether to create a fresh context that doesn't inherit from parent. Default: `False`.
+`capture_exceptions` | `Optional[bool]`. Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting. Default: `None`.
 
 ### `Client.tag`
 
@@ -1096,16 +1021,16 @@ tag(name: str, value: Any) -> None
 
 Add a tag to the current context.
 
-Tags attach as event `properties` (overriding `super_properties`,
-overridden by explicit `properties`). Calling `set()` or `set_once()`
-in the context also folds active tags into `$set` or `$set_once`.
+Every event and exception captured in this context includes this key-value pair in its `properties`. Calling `set()` or `set_once()` in the context also saves active tags as person properties.
+
+If the same key appears in multiple places, explicit `properties` on the call win over context tags, and context tags win over `super_properties`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`name` | `str` | The tag key. | *required*
-`value` | `Any` | The tag value. | *required*
+Name | Description
+---- | -----------
+`name` | `str`. The tag key. Required.
+`value` | `Any`. The tag value. Required.
 
 ### `Client.get_tags`
 
@@ -1129,20 +1054,14 @@ set_context_option(key: str, value: Any) -> None
 
 Set a capture option for every event captured within the current context.
 
-Context options fill options an event leaves unset, before
-`before_send` runs, so the hook sees them. They override
-`super_options`. An event's own `options` override them, and
-`before_send` can change them. They never set
-`process_person_profile` on identify-style events, such as
-`$identify` or `$set`, whose distinct ID the SDK did not generate:
-those default it to `True`.
+Context options fill options an event leaves unset, before `before_send` runs, so the hook sees them. They override `super_options`. An event's own `options` override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The option name, such as `"process_person_profile"`. | *required*
-`value` | `Any` | The option value, sent as given. | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The option name, such as `"process_person_profile"`. Required.
+`value` | `Any`. The option value, sent as given. Required.
 
 ### `Client.get_context_options`
 
@@ -1166,16 +1085,15 @@ identify_context(distinct_id: str) -> None
 
 Identify the current context with a distinct ID.
 
-Python 8 has no `identify()` method, so call this inside `new_context()`
-to attribute `capture()`, `capture_exception()`, `evaluate_flags()`, and
-`start_span()` calls to the user. Events outside an identified context
-without an explicit `distinct_id` send as personless.
+In Python SDK `6.0.0` and later, user identification uses the [contexts](/docs/libraries/python#posthognew_context) pattern rather than a separate `identify()` method.
+
+Call this method inside `new_context()`, and every event, exception, flag evaluation, and span in that context is automatically tagged with this `distinct_id`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `str` | The distinct ID to associate with the current context and its children. | *required*
+Name | Description
+---- | -----------
+`distinct_id` | `str`. The distinct ID to associate with the current context and its children. Required.
 
 ### `Client.set_context_session`
 
@@ -1185,14 +1103,13 @@ set_context_session(session_id: str) -> None
 
 Set the session ID for the current context.
 
-Session IDs must be valid UUIDv7 strings, such as `X-POSTHOG-SESSION-ID`
-forwarded from PostHog JS.
+Session IDs must be valid UUIDv7 strings, such as `X-POSTHOG-SESSION-ID` from PostHog JS.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`session_id` | `str` | The session ID to associate with the current context and its children. | *required*
+Name | Description
+---- | -----------
+`session_id` | `str`. The session ID to associate with the current context and its children. Required.
 
 ### `Client.set_context_device_id`
 
@@ -1204,9 +1121,9 @@ Set the device ID for the current context.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`device_id` | `str` | The device ID to associate with the current context and its children. | *required*
+Name | Description
+---- | -----------
+`device_id` | `str`. The device ID to associate with the current context and its children. Required.
 
 ### `Client.feature_flags`
 
@@ -1226,15 +1143,15 @@ Get feature flag payloads for a user, preserving valid serialized JSON.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The distinct ID of the user. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The distinct ID of the user. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -1252,15 +1169,15 @@ Get feature flags decision.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `Optional[ID_TYPES]` | The distinct ID of the user. | `None`
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | A dictionary of group information. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | A dictionary of person properties. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | A dictionary of group properties. | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this request. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. | `None`
-`device_id` | `Optional[str]` | The device ID for this request. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `Optional[ID_TYPES]`. The distinct ID of the user. Default: `None`.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. A dictionary of group information. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. A dictionary of person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. A dictionary of group properties. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP for this request. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. A list of specific flag keys to evaluate. If provided, only these flags will be evaluated, improving performance. Default: `None`.
+`device_id` | `Optional[str]`. The device ID for this request. Default: `None`.
 
 **Examples:**
 
@@ -1276,10 +1193,7 @@ metrics: PostHogMetrics
 
 The `posthog.metrics` API: a statsd-style pre-aggregating metrics client — alpha.
 
-Samples fold into per-series aggregates in memory and flush as one OTLP
-data point per series per window, so recording from hot paths is cheap.
-Configure via the `metrics` client option; pending metrics flush on
-`shutdown()`.
+Samples fold into per-series aggregates in memory and flush as one OTLP data point per series per window, so recording from hot paths is cheap. Configure via the `metrics` client option; pending metrics flush on `shutdown()`.
 
 **Examples:**
 
@@ -1300,9 +1214,9 @@ Get the payload for a remote config feature flag.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The remote config feature flag key. | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The remote config feature flag key. Required.
 
 **Returns:**
 
@@ -1327,9 +1241,9 @@ Return where a locally loaded feature flag is meant to be evaluated.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
 
 **Returns:**
 
@@ -1355,16 +1269,13 @@ get_feature_flag_keys_by_evaluation_runtime(evaluation_runtime: Union[FeatureFla
 
 Return the keys of locally loaded flags that a runtime can evaluate.
 
-A flag set to `FeatureFlagEvaluationRuntime.ALL` suits either runtime,
-so it is returned for `CLIENT` and for `SERVER`, and asking for
-`ALL` returns every loaded flag. Use this to decide which flags to hand
-to a browser when a backend serves flags to its own frontend.
+A flag set to `FeatureFlagEvaluationRuntime.ALL` suits either runtime, so it is returned for `CLIENT` and for `SERVER`, and asking for `ALL` returns every loaded flag. Use this to decide which flags to hand to a browser when a backend serves flags to its own frontend.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`evaluation_runtime` | `Union[FeatureFlagEvaluationRuntime, str]` | The runtime to match, as a `FeatureFlagEvaluationRuntime` or its string value. | *required*
+Name | Description
+---- | -----------
+`evaluation_runtime` | `Union[FeatureFlagEvaluationRuntime, str]`. The runtime to match, as a `FeatureFlagEvaluationRuntime` or its string value. Required.
 
 **Returns:**
 
@@ -1390,14 +1301,9 @@ PosthogContextMiddleware(get_response)
 
 Middleware to automatically track Django requests.
 
-Place this after `AuthenticationMiddleware` in Django's `MIDDLEWARE` list so
-authenticated `request.user` identity and email are available. For Django REST
-Framework handled API exceptions, also configure `posthog.integrations.drf.exception_handler`.
+Place this after `AuthenticationMiddleware` in Django's `MIDDLEWARE` list so `request.user` identity and email are available. In Django REST Framework apps, pair it with `posthog.integrations.drf.exception_handler` to capture handled API errors.
 
-This middleware reads `request.user` before your view runs. On login or signup
-requests where `django.contrib.auth.login()` runs inside the view, call
-`identify_context(str(user.pk))` (or use `user_logged_in`) so later events in
-that request link to the authenticated user.
+The middleware reads `request.user` before your view runs. After calling `django.contrib.auth.login()` in a login or signup view, call `identify_context(str(user.pk))` or hook `user_logged_in` so events in that request attach to the user.
 
 This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
 - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
@@ -1410,36 +1316,19 @@ This middleware wraps all calls with a posthog context. It attempts to extract t
 - User agent as `$user_agent`
 
 Configure the integration with these Django settings:
-- `POSTHOG_MW_CLIENT`: client used for automatic exception capture, or the global client.
-  This does not redirect events explicitly captured through other clients.
-- `POSTHOG_MW_CAPTURE_EXCEPTIONS`: `False` enables context enrichment only;
-  `True` enables automatic exception capture; `None` inherits the effective client's
-  `enable_exception_autocapture`. When omitted, the legacy default is `True`.
-- `POSTHOG_MW_REQUEST_FILTER`: a callback receiving the request. Returning `False`
-  disables both enrichment and automatic exception capture for that request.
+- `POSTHOG_MW_CLIENT`: client used for automatic exception capture, or the global client. This does not redirect events explicitly captured through other clients.
+- `POSTHOG_MW_CAPTURE_EXCEPTIONS`: `False` enables context enrichment only; `True` enables automatic exception capture; `None` inherits the effective client's `enable_exception_autocapture`. When omitted, the legacy default is `True`.
+- `POSTHOG_MW_REQUEST_FILTER`: a callback receiving the request. Returning `False` disables both enrichment and automatic exception capture for that request.
 - `POSTHOG_MW_EXTRA_PROPERTIES`: a callback returning additional event properties.
-- `POSTHOG_MW_CAPTURE_TRACING_HEADERS`: read PostHog identity and session headers
-  as request-scoped analytics context (default: `True`). Explicit capture IDs and
-  event properties take precedence. These values are never authentication or
-  authorization. Authenticated Django user identity remains the fallback when no
-  usable header ID is available or header capture is disabled.
-- `POSTHOG_MW_TRUST_TRACING_HEADERS`: deprecated alias for
-  `POSTHOG_MW_CAPTURE_TRACING_HEADERS`; the capture-named setting takes precedence.
+- `POSTHOG_MW_CAPTURE_TRACING_HEADERS`: read PostHog identity and session headers as request-scoped analytics context (default: `True`). Explicit capture IDs and event properties take precedence. These values are never authentication or authorization. Authenticated Django user identity remains the fallback when no usable header ID is available or header capture is disabled.
+- `POSTHOG_MW_TRUST_TRACING_HEADERS`: deprecated alias for `POSTHOG_MW_CAPTURE_TRACING_HEADERS`; the capture-named setting takes precedence.
 - `POSTHOG_MW_PROPERTIES_MAP`: an optional callback transforming request properties.
 
-The old `POSTHOG_MW_EXTRA_TAGS` and `POSTHOG_MW_TAG_MAP` settings remain aliases;
-the property-named settings take precedence when both are configured.
+The old `POSTHOG_MW_EXTRA_TAGS` and `POSTHOG_MW_TAG_MAP` settings remain aliases; the property-named settings take precedence when both are configured.
 
-Request properties are included on all events captured within the active context,
-including when automatic exception capture is disabled.
-See the context documentation for more information. The extracted distinct ID and session ID,
-if found, are used to associate all events captured in the middleware context with the same distinct ID
-and session as currently active on the frontend. See the documentation for `set_context_session`
-and `identify_context` for more details.
+Request properties are included on all events captured within the active context, including when automatic exception capture is disabled. See the context documentation for more information. The extracted distinct ID and session ID, if found, are used to associate all events captured in the middleware context with the same distinct ID and session as currently active on the frontend. See the documentation for `set_context_session` and `identify_context` for more details.
 
-This middleware is hybrid-capable: it supports both WSGI (sync) and ASGI (async) Django applications. The middleware
-detects at initialization whether the next middleware in the chain is async or sync, and adapts its behavior accordingly.
-This ensures compatibility with both pure sync and pure async middleware chains, as well as mixed chains in ASGI mode.
+This middleware is hybrid-capable: it supports both WSGI (sync) and ASGI (async) Django applications. The middleware detects at initialization whether the next middleware in the chain is async or sync, and adapts its behavior accordingly. This ensures compatibility with both pure sync and pure async middleware chains, as well as mixed chains in ASGI mode.
 
 **Functions:**
 
@@ -1471,9 +1360,9 @@ Initialize the middleware with Django's next handler.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`get_response` |  | The next middleware or view handler in Django's middleware chain. May be synchronous or asynchronous. | 
+Name | Description
+---- | -----------
+`get_response` | The next middleware or view handler in Django's middleware chain. May be synchronous or asynchronous.
 
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_properties`
 
@@ -1483,8 +1372,7 @@ async aextract_properties(request)
 
 Async version of extract_properties for use in async request handling.
 
-Uses await request.auser() instead of request.user to avoid
-SynchronousOnlyOperation in async context.
+Uses await request.auser() instead of request.user to avoid SynchronousOnlyOperation in async context.
 
 Follows Django's naming convention for async methods (auser, asave, etc.).
 
@@ -1496,8 +1384,7 @@ async aextract_request_user(request)
 
 Async version of extract_request_user for use in async request handling.
 
-Uses await request.auser() instead of request.user to avoid
-SynchronousOnlyOperation in async context.
+Uses await request.auser() instead of request.user to avoid SynchronousOnlyOperation in async context.
 
 Follows Django's naming convention for async methods (auser, asave, etc.).
 
@@ -1579,12 +1466,9 @@ process_exception(request, exception)
 
 Process exceptions from views and downstream middleware.
 
-Django calls this WHILE still inside the context created by __call__,
-so request tags have already been extracted and set. This method just
-needs to capture the exception directly.
+Django calls this WHILE still inside the context created by __call__, so request tags have already been extracted and set. This method just needs to capture the exception directly.
 
-Django converts view exceptions into responses before they propagate through
-the middleware stack, so the context manager in __call__/__acall__ never sees them.
+Django converts view exceptions into responses before they propagate through the middleware stack, so the context manager in __call__/__acall__ never sees them.
 
 Note: Django's process_exception is always synchronous, even for async views.
 
@@ -1618,8 +1502,7 @@ exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
 
 Capture handled DRF 5xx exceptions using DRF's default handler.
 
-Keep `PosthogContextMiddleware` enabled alongside this handler for request
-context and unhandled exceptions.
+Keep `PosthogContextMiddleware` enabled alongside this handler for request context and unhandled exceptions.
 
 **Examples:**
 
@@ -1640,21 +1523,17 @@ Create a PostHog-instrumented DRF exception handler.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`handler` | `Optional[Callable[[Exception, Mapping[str, Any]], Any]]` | Handler to delegate to. Defaults to DRF's standard exception handler. Its return value and raised exceptions are preserved. | `None`
-`client` | `Optional[Client]` | Optional PostHog client. Client precedence is this argument, the legacy `POSTHOG_DRF_CLIENT` alias, `POSTHOG_MW_CLIENT`, then the global PostHog client. | `None`
-`capture_exceptions` | `Optional[bool]` | Whether to capture handled DRF exceptions. An explicit value takes precedence over `POSTHOG_MW_CAPTURE_EXCEPTIONS`. A boolean setting is used directly; an explicit `None` setting inherits the effective client's `enable_exception_autocapture`. An omitted or malformed setting preserves the legacy `True` default. | `None`
-`capture_4xx` | `bool` | Also capture handled 4xx responses. Disabled by default to avoid reporting expected API errors. | `False`
-`exception_filter` | `Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]]` | Optional final filter called with `(exception, response, context)`. Returning `False` suppresses capture. | `None`
+Name | Description
+---- | -----------
+`handler` | `Optional[Callable[[Exception, Mapping[str, Any]], Any]]`. Handler to delegate to. Defaults to DRF's standard exception handler. Its return value and raised exceptions are preserved. Default: `None`.
+`client` | `Optional[Client]`. Optional PostHog client. Client precedence is this argument, the legacy `POSTHOG_DRF_CLIENT` alias, `POSTHOG_MW_CLIENT`, then the global PostHog client. Default: `None`.
+`capture_exceptions` | `Optional[bool]`. Whether to capture handled DRF exceptions. An explicit value takes precedence over `POSTHOG_MW_CAPTURE_EXCEPTIONS`. A boolean setting is used directly; an explicit `None` setting inherits the effective client's `enable_exception_autocapture`. An omitted or malformed setting preserves the legacy `True` default. Default: `None`.
+`capture_4xx` | `bool`. Also capture handled 4xx responses. Disabled by default to avoid reporting expected API errors. Default: `False`.
+`exception_filter` | `Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]]`. Optional final filter called with `(exception, response, context)`. Returning `False` suppresses capture. Default: `None`.
 
-When `POSTHOG_MW_REQUEST_FILTER` is configured, it is also applied to the
-underlying Django request before capture so handled errors cannot bypass the
-middleware's per-request exclusion.
+When `POSTHOG_MW_REQUEST_FILTER` is configured, it is also applied to the underlying Django request before capture so handled errors cannot bypass the middleware's per-request exclusion.
 
-The delegated handler is called first. A `None` response is never
-captured here because DRF will re-raise that exception, allowing Django's
-middleware to capture it as unhandled.
+The delegated handler is called first. A `None` response is never captured here because DRF will re-raise that exception, allowing Django's middleware to capture it as unhandled.
 
 ### `posthog.integrations.flask.PosthogFlaskIntegration`
 
@@ -1666,21 +1545,17 @@ Add PostHog request context and exception tracking to a Flask app.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`app` | `Optional[Flask]` | An optional Flask application. If omitted, call `init_app` later (the Flask application-factory pattern). | `None`
-`client` | `Optional[Client]` | Optional destination for automatically captured exceptions. The global client is used by default. Request context still enriches events captured through any client and does not redirect capture calls. | `None`
-`capture_exceptions` | `Optional[bool]` | Capture exceptions that reach Flask's unhandled exception machinery. If omitted, inherit the effective client's `enable_exception_autocapture` setting. Pass `True` or `False` to override it. | `None`
-`request_filter` | `Optional[Callable[[Request], bool]]` | Optional callback receiving Flask's request object. A false return value disables both context and exception capture for that request. | `None`
-`extra_properties` | `Optional[Callable[[Request], Mapping[str, Any]]]` | Optional callback returning additional event properties. This is useful for application-specific metadata such as an authenticated user's role. Values should not contain secrets or request bodies. | `None`
-`capture_tracing_headers` | `Optional[bool]` | Read PostHog distinct and session ID headers as request-scoped analytics context. Defaults to True. Explicit capture IDs and event properties take precedence. Never use these values for security. | `None`
-`trust_tracing_headers` | `Optional[bool]` | Deprecated alias for `capture_tracing_headers`. The capture-named option takes precedence when both are supplied. | `None`
+Name | Description
+---- | -----------
+`app` | `Optional[Flask]`. An optional Flask application. If omitted, call `init_app` later (the Flask application-factory pattern). Default: `None`.
+`client` | `Optional[Client]`. Optional destination for automatically captured exceptions. The global client is used by default. Request context still enriches events captured through any client and does not redirect capture calls. Default: `None`.
+`capture_exceptions` | `Optional[bool]`. Capture exceptions that reach Flask's unhandled exception machinery. If omitted, inherit the effective client's `enable_exception_autocapture` setting. Pass `True` or `False` to override it. Default: `None`.
+`request_filter` | `Optional[Callable[[Request], bool]]`. Optional callback receiving Flask's request object. A false return value disables both context and exception capture for that request. Default: `None`.
+`extra_properties` | `Optional[Callable[[Request], Mapping[str, Any]]]`. Optional callback returning additional event properties. This is useful for application-specific metadata such as an authenticated user's role. Values should not contain secrets or request bodies. Default: `None`.
+`capture_tracing_headers` | `Optional[bool]`. Read PostHog distinct and session ID headers as request-scoped analytics context. Defaults to True. Explicit capture IDs and event properties take precedence. Never use these values for security. Default: `None`.
+`trust_tracing_headers` | `Optional[bool]`. Deprecated alias for `capture_tracing_headers`. The capture-named option takes precedence when both are supplied. Default: `None`.
 
-The integration intentionally does not capture exceptions handled by an
-application error handler, expected HTTP exceptions, request or response
-bodies, query strings, cookies, authorization headers, or arbitrary headers.
-Call `capture_exception` explicitly from a custom error handler if a
-handled exception should be reported.
+The integration intentionally does not capture exceptions handled by an application error handler, expected HTTP exceptions, request or response bodies, query strings, cookies, authorization headers, or arbitrary headers. Call `capture_exception` explicitly from a custom error handler if a handled exception should be reported.
 
 **Functions:**
 
@@ -1753,23 +1628,19 @@ PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_ex
 
 Add PostHog context and automatic exception capture to an ASGI app.
 
-It creates a context for each HTTP or WebSocket request and captures
-exceptions that escape the app. In FastAPI or Starlette, add it with
-`app.add_middleware(PosthogASGIMiddleware, client=posthog)`. For Litestar,
-another ASGI framework or a raw ASGI app, wrap the app with
-`app = PosthogASGIMiddleware(app, client=posthog)`.
+It creates a context for each HTTP or WebSocket request and captures exceptions that escape the app. In FastAPI or Starlette, add it with `app.add_middleware(PosthogASGIMiddleware, client=posthog)`. For Litestar, another ASGI framework or a raw ASGI app, wrap the app with `app = PosthogASGIMiddleware(app, client=posthog)`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`app` | `_ASGIApp` | The downstream ASGI application. | *required*
-`client` | `Optional[Client]` | Optional destination for automatically captured exceptions. The global client is used by default. Request context still enriches events captured through any client and does not redirect capture calls. | `None`
-`capture_exceptions` | `Optional[bool]` | Capture exceptions escaping the downstream app. If omitted, inherit the effective client's `enable_exception_autocapture` setting. Pass `True` or `False` to override it. | `None`
-`request_filter` | `Optional[_RequestFilter]` | Optional sync or async callback receiving the ASGI scope. Returning `False` bypasses all instrumentation for that scope. | `None`
-`extra_properties` | `Optional[_ExtraProperties]` | Optional sync or async callback receiving the ASGI scope and returning additional event properties. | `None`
-`capture_tracing_headers` | `Optional[bool]` | Read PostHog distinct and session ID headers as request-scoped analytics context. Defaults to True. Explicit capture IDs and event properties take precedence. Never use these values for security. | `None`
-`trust_tracing_headers` | `Optional[bool]` | Deprecated alias for `capture_tracing_headers`. The capture-named option takes precedence when both are supplied. | `None`
+Name | Description
+---- | -----------
+`app` | `_ASGIApp`. The downstream ASGI application. Required.
+`client` | `Optional[Client]`. Optional destination for automatically captured exceptions. The global client is used by default. Request context still enriches events captured through any client and does not redirect capture calls. Default: `None`.
+`capture_exceptions` | `Optional[bool]`. Capture exceptions escaping the downstream app. If omitted, inherit the effective client's `enable_exception_autocapture` setting. Pass `True` or `False` to override it. Default: `None`.
+`request_filter` | `Optional[_RequestFilter]`. Optional sync or async callback receiving the ASGI scope. Returning `False` bypasses all instrumentation for that scope. Default: `None`.
+`extra_properties` | `Optional[_ExtraProperties]`. Optional sync or async callback receiving the ASGI scope and returning additional event properties. Default: `None`.
+`capture_tracing_headers` | `Optional[bool]`. Read PostHog distinct and session ID headers as request-scoped analytics context. Defaults to True. Explicit capture IDs and event properties take precedence. Never use these values for security. Default: `None`.
+`trust_tracing_headers` | `Optional[bool]`. Deprecated alias for `capture_tracing_headers`. The capture-named option takes precedence when both are supplied. Default: `None`.
 
 **Attributes:**
 
@@ -1837,13 +1708,13 @@ Celery integration that captures task lifecycle events and exceptions.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`client` | `Optional[Client]` | Optional `Client` instance. When provided, all events and exceptions are captured through this client rather than the global `posthog` module. Don't skip this if using a custom flag definition cache provider, and pass the custom `Client` instance here initialized with the custom provider so fork safety for that provider is handled correctly. | `None`
-`capture_exceptions` | `bool` | Whether to capture task exceptions via `capture_exception` (default `True`). | `True`
-`capture_task_lifecycle_events` | `bool` | Whether to emit lifecycle events of the task such as "started", "success", "failure" etc. (default `True`). | `True`
-`propagate_context` | `bool` | Whether to propagate PostHog context (distinct ID, session ID, tags, context options) from the producer to the worker via task headers (default `True`). | `True`
-`task_filter` | `Optional[Callable[[Optional[str], dict[str, Any]], bool]]` | Optional callback `(task_name, task_properties) -> bool` expected to return `False` if a given task should not be tracked. | `None`
+Name | Description
+---- | -----------
+`client` | `Optional[Client]`. Optional `Client` instance. When provided, all events and exceptions are captured through this client rather than the global `posthog` module. Don't skip this if using a custom flag definition cache provider, and pass the custom `Client` instance here initialized with the custom provider so fork safety for that provider is handled correctly. Default: `None`.
+`capture_exceptions` | `bool`. Whether to capture task exceptions via `capture_exception` (default `True`). Default: `True`.
+`capture_task_lifecycle_events` | `bool`. Whether to emit lifecycle events of the task such as "started", "success", "failure" etc. (default `True`). Default: `True`.
+`propagate_context` | `bool`. Whether to propagate PostHog context (distinct ID, session ID, tags, context options) from the producer to the worker via task headers (default `True`). Default: `True`.
+`task_filter` | `Optional[Callable[[Optional[str], dict[str, Any]], bool]]`. Optional callback `(task_name, task_properties) -> bool` expected to return `False` if a given task should not be tracked. Default: `None`.
 
 **Functions:**
 
@@ -1887,15 +1758,9 @@ client = client
 instrument() -> None
 ```
 
-Connect Celery signal handlers to capture task events and exceptions.
-Call this after initializing the PostHog client and this integration.
+Connect Celery signal handlers to capture task events and exceptions. Call this after initializing the PostHog client and this integration.
 
-If Celery runs on a single host, reinstrumenting in worker children is
-not strictly necessary because the PostHog client and this integration
-are fork-safe. If Celery workers run across multiple hosts, each worker
-process must initialize PostHog, this integration, and call
-`instrument()`. Celery provides `worker_process_init` signal to help
-with this.
+If Celery runs on a single host, reinstrumenting in worker children is not strictly necessary because the PostHog client and this integration are fork-safe. If Celery workers run across multiple hosts, each worker process must initialize PostHog, this integration, and call `instrument()`. Celery provides `worker_process_init` signal to help with this.
 
 #### `posthog.integrations.celery.PosthogCeleryIntegration.propagate_context`
 
@@ -1909,12 +1774,9 @@ propagate_context = propagate_context
 shutdown() -> None
 ```
 
-Disconnect all signal handlers registered by `instrument()`, flush all pending events
-and cleanly shutdown the integration.
+Disconnect all signal handlers registered by `instrument()`, flush all pending events and cleanly shutdown the integration.
 
-`shutdown()` is also registered on `worker_process_shutdown` and `atexit` signals,
-but there is no guarantee those will always be called, so we strongly recommend calling
-it manually when the integration is no longer needed to avoid data loss.
+`shutdown()` is also registered on `worker_process_shutdown` and `atexit` signals, but there is no guarantee those will always be called, so we strongly recommend calling it manually when the integration is no longer needed to avoid data loss.
 
 #### `posthog.integrations.celery.PosthogCeleryIntegration.task_filter`
 
@@ -1940,14 +1802,13 @@ set_socket_options(socket_options: Optional[SocketOptions]) -> None
 
 Configure socket options for all SDK HTTP connections.
 
-Call this during initialization, before making API requests. Pass `None`
-to reset to the default socket behavior.
+Call this during initialization, before making API requests. Pass `None` to reset to the default socket behavior.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`socket_options` | `Optional[SocketOptions]` | A list of `(level, option, value)` tuples accepted by urllib3/`socket.setsockopt()`, or `None` to reset defaults. | *required*
+Name | Description
+---- | -----------
+`socket_options` | `Optional[SocketOptions]`. A list of `(level, option, value)` tuples accepted by urllib3/`socket.setsockopt()`, or `None` to reset defaults. Required.
 
 **Examples:**
 
@@ -1966,11 +1827,7 @@ enable_keep_alive() -> None
 
 Enable TCP keepalive for SDK HTTP connections.
 
-This helps prevent idle pooled connections from being dropped by network
-infrastructure. Call during initialization, before making API requests.
-Where the platform supports the corresponding socket options, it uses
-a 60 second idle time, a 60 second probe interval and 3 probes before
-timeout. Unsupported settings keep their system defaults.
+This helps prevent idle pooled connections from being dropped by network infrastructure. Call during initialization, before making API requests. Where the platform supports the corresponding socket options, it uses a 60 second idle time, a 60 second probe interval and 3 probes before timeout. Unsupported settings keep their system defaults.
 
 ### `posthog.request.disable_connection_reuse`
 
@@ -1980,9 +1837,7 @@ disable_connection_reuse() -> None
 
 Disable HTTP connection reuse for SDK requests.
 
-Each request will create a fresh connection. This can avoid issues with
-environments that terminate pooled connections, but adds per-request
-overhead. Call during initialization, before making API requests.
+Each request will create a fresh connection. This can avoid issues with environments that terminate pooled connections, but adds per-request overhead. Call during initialization, before making API requests.
 
 ## AsyncClient
 
@@ -1994,23 +1849,27 @@ Needs the `async` extra, `posthog[async]`.
 AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
-Initialize an asyncio-native PostHog client.
+Create an async PostHog client. Import it as `AsyncPosthog` from `posthog`.
 
-Import as `AsyncPosthog` (`from posthog import AsyncPosthog`). Keep one
-client for your app's lifetime (`async with AsyncPosthog(...)` or
-`await shutdown()` on teardown) on a single event loop.
+Keep one client for your app's lifetime on one event loop. Open it with `async with AsyncPosthog(...)`, or call `await shutdown()` on teardown.
 
-`capture()`, `capture_ai()`, `set()`, `set_once()`, `group_identify()`,
-`alias()`, and `capture_exception()` queue in memory synchronously, so don't
-`await` them (use `await capture_immediate()` or
-`await capture_ai_immediate()` when a handler must wait for delivery).
-`evaluate_flags()`, `get_remote_config_payload()`, `emails`, `flush()`,
-`shutdown()`, and `join()` are awaitable.
+#### Know what to await
 
-`secret_key` authenticates `get_remote_config_payload()` and `emails`, not
-local flag polling. `before_send` and `on_error` accept sync or
-`async def` callbacks, while `start_span` and `sync_mode` exist only on
-sync `Posthog`.
+Queue methods write to memory and return right away. Network reads and lifecycle calls are coroutines.
+
+| Call | Methods | Reach for it when |
+| --- | --- | --- |
+| Don't `await` | `capture`, `capture_ai`, `set`, `set_once`, `group_identify`, `alias`, `capture_exception` | Queueing events on the request path without waiting on HTTP |
+| `await` | `capture_immediate`, `capture_ai_immediate` | A handler must confirm the upload attempt finished before returning |
+| `await` | `evaluate_flags`, `get_remote_config_payload`, `emails.send`, `emails.get`, `flush`, `shutdown`, `join` | Evaluating flags, sending emails, or draining queues on the event loop |
+
+#### The differences from `Client`
+
+Constructor options match `Client(...)`, except in three places:
+
+- **Remote flags only.** `secret_key` authenticates `get_remote_config_payload()` and `emails`. `AsyncPosthog` doesn't poll flag definitions locally.
+- **Async callbacks.** `before_send` and `on_error` accept regular functions or `async def` coroutines.
+- **Sync-only features.** `start_span()` and `sync_mode` live on sync `Posthog` only.
 
 ### `AsyncClient.capture`
 
@@ -2020,8 +1879,7 @@ capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Queue an event without blocking for network delivery.
 
-Do not `await` this method. See `Client.capture` for parameter and
-person-profile rules, or `await capture_immediate()` to wait for delivery.
+Don't `await` this method. Call `await capture_immediate()` to wait for delivery, or see `Client.capture` for parameter rules.
 
 ### `AsyncClient.capture_immediate`
 
@@ -2037,11 +1895,9 @@ Capture one event and wait until its delivery attempt completes.
 set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```
 
-Queue a `$set` event to overwrite person properties without blocking.
+Queue a `$set` event to overwrite person properties.
 
-Do not `await` this method. Falls back to `identify_context()`, folds
-active context tags into `$set`, and returns `None` without sending if
-`distinct_id` or properties are missing.
+Don't `await` this method, which uses `identify_context()` when `distinct_id` is omitted and folds active tags into `$set`. Without a distinct ID or properties, it sends nothing and returns `None`.
 
 ### `AsyncClient.set_once`
 
@@ -2049,10 +1905,9 @@ active context tags into `$set`, and returns `None` without sending if
 set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```
 
-Queue a `$set_once` event to set person properties only if unset.
+Queue a `$set_once` event to set person properties only when unset.
 
-Do not `await` this method. Behaves like `set()` without overwriting
-existing values.
+Don't `await` this method. It follows the same context and tag rules as `set()` without overwriting existing values.
 
 ### `AsyncClient.alias`
 
@@ -2062,8 +1917,7 @@ alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Uni
 
 Queue a `$create_alias` event linking `previous_id` to `distinct_id`.
 
-Do not `await` this method. Neither ID falls back to `identify_context()`,
-and never alias to a shared placeholder such as `"anonymous"`.
+Don't `await` this method. Neither ID falls back to `identify_context()`, and you shouldn't alias users to a shared placeholder like `"anonymous"`.
 
 ### `AsyncClient.capture_exception`
 
@@ -2073,13 +1927,9 @@ capture_exception(exception: Optional[ExceptionArg] = None, *, level: Optional[s
 
 Capture an exception. This method never raises, including in debug mode.
 
-`level` sets `$exception_level` and defaults to `"error"`. An unknown
-value counts as unset. Reserved exception properties in `properties`,
-such as `$exception_list` and `$exception_level`, are ignored.
+`level` sets `$exception_level` and defaults to `"error"`. An unknown value counts as unset. Reserved exception properties in `properties`, such as `$exception_list` and `$exception_level`, are ignored.
 
-When OpenTelemetry is installed and a valid span is active, its trace and
-span IDs are added as `$trace_id` and `$span_id` event properties,
-unless the event, a context tag or `super_properties` sets either one.
+When OpenTelemetry is installed and a valid span is active, its trace and span IDs are added as `$trace_id` and `$span_id` event properties, unless the event, a context tag or `super_properties` sets either one.
 
 ### `AsyncClient.emails`
 
@@ -2087,14 +1937,12 @@ unless the event, a context tag or `super_properties` sets either one.
 emails: AsyncEmails
 ```
 
-Send transactional email from PostHog email templates or from content
-in your code, and read the status of each email sent with `get`.
+Send transactional email from PostHog templates or inline code, and read delivery status with `get`.
 
-Needs `secret_key`, a project secret API key with the `transactional_email:write`
-scope, and `posthog[async]`. Sends go to `app_host`, or to the PostHog
-Cloud app host of `host`. `email_request_timeout_seconds` and
-`email_request_max_retries` configure each send. A disabled or shut-down
-client sends nothing. See `posthog.emails` for setup.
+- **Requirements.** Needs `posthog[async]` and a `secret_key` project secret API key with the `transactional_email:write` scope.
+- **Routing.** Sends go to `app_host`, or to the PostHog Cloud app host of `host`.
+- **Retries and timeouts.** Configured by `email_request_timeout_seconds` and `email_request_max_retries`.
+- **Lifecycle.** A disabled or shut-down client sends nothing. See `posthog.emails` for full setup.
 
 **Examples:**
 
@@ -2112,10 +1960,9 @@ await client.emails.send(
 async flush(timeout_seconds: Optional[float] = 10) -> None
 ```
 
-Drain queued analytics and AI events while keeping the client reusable.
+Drain queued analytics and AI events while keeping the client open.
 
-Await this before a short-lived handler exits rather than calling
-`shutdown()` per request.
+Await this before a short-lived handler returns rather than calling `shutdown()` per request.
 
 ### `AsyncClient.evaluate_flags`
 
@@ -2125,10 +1972,7 @@ async evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional
 
 Evaluate flags remotely without blocking the event loop.
 
-The returned snapshot has synchronous in-memory accessors. Pass it to
-`capture(flags=...)` to attach the exact values used for branching.
-This client does not evaluate flags locally, so the snapshot's
-`unresolved_flags` is always empty.
+The returned snapshot has synchronous in-memory accessors. Pass it to `capture(flags=...)` to attach the exact values used for branching. This client does not evaluate flags locally, so the snapshot's `unresolved_flags` is always empty.
 
 ### `AsyncClient.group_identify`
 
@@ -2136,10 +1980,9 @@ This client does not evaluate flags locally, so the snapshot's
 group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 ```
 
-Queue a `$groupidentify` event to update group properties (requires Group Analytics).
+Queue a `$groupidentify` event to update group properties.
 
-Do not `await` this method. Pass `name` in `properties` for the UI display
-name, and pass `groups` on `capture()` to link events to the group.
+Don't `await` this method, which requires the Group Analytics add-on. Pass `name` in `properties` for the UI display name, and pass `groups` on `capture()` to link events.
 
 ### `AsyncClient.shutdown`
 
@@ -2149,8 +1992,7 @@ async shutdown() -> None
 
 Flush queued events, stop async workers, and close HTTP transports.
 
-Await once at app teardown (or exit `async with AsyncPosthog(...)`) and
-don't reuse the client afterward.
+Await this once at app teardown, or use `async with AsyncPosthog(...)`. Don't reuse the client afterward.
 
 ### `AsyncClient.join`
 
@@ -2168,9 +2010,7 @@ capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Queue an AI event for the AI capture endpoint without blocking.
 
-Takes the same arguments and returns the same value as `capture()`.
-The event uses a separate queue with a larger per-event size cap. The
-payload is sent as given, with no redaction or truncation.
+Takes the same arguments and returns the same value as `capture()`. The event uses a separate queue with a larger per-event size cap. The payload is sent as given, with no redaction or truncation.
 
 ### `AsyncClient.capture_ai_immediate`
 
@@ -2200,19 +2040,19 @@ new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, clie
 
 Create a new context scope that will be active for the duration of the with block.
 
-Contexts use `contextvars`, so state carries across function calls and `await`
-within the current execution flow, while new threads start without context. Child
-contexts inherit parent state and override keys locally without mutating the parent.
-Pass `fresh=True` at request or background-job boundaries to clear inherited state,
-and note that explicit arguments on `capture()` always win over context state.
+Contexts store shared identity, session ID, options, and tags in `contextvars`:
+
+- **Propagation.** State carries across function calls and `await` automatically. New threads start with an empty context.
+- **Inheritance.** Child contexts inherit parent values without mutating the parent. Pass `fresh=True` at request or job boundaries to clear inherited state.
+- **Precedence.** Explicit arguments on `capture()` override context state, and context state overrides `super_properties`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`fresh` | `bool` | Whether to start with a fresh context (default: False) | `False`
-`capture_exceptions` | `Optional[bool]` | Whether to capture uncaught exceptions escaping the `with` block. If omitted, defaults to the relevant client's exception autocapture setting. | `None`
-`client` | `Optional[Client]` | Optional Posthog client instance to use for this context (default: None) | `None`
+Name | Description
+---- | -----------
+`fresh` | `bool`. Whether to start with a fresh context (default: False). Default: `False`.
+`capture_exceptions` | `Optional[bool]`. Whether to capture uncaught exceptions escaping the `with` block. If omitted, defaults to the relevant client's exception autocapture setting. Default: `None`.
+`client` | `Optional[Client]`. Optional Posthog client instance to use for this context (default: None). Default: `None`.
 
 **Examples:**
 
@@ -2233,10 +2073,10 @@ Decorator that creates a new context for the function.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`fresh` |  | Whether to start with a fresh context (default: False) | `False`
-`capture_exceptions` | `Optional[bool]` | Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting. | `None`
+Name | Description
+---- | -----------
+`fresh` | Whether to start with a fresh context (default: False). Default: `False`.
+`capture_exceptions` | `Optional[bool]`. Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting. Default: `None`.
 
 **Examples:**
 
@@ -2256,20 +2096,19 @@ set_context_session(session_id: str)
 
 Set the session ID for the current context.
 
-Session IDs must be valid UUIDv7 strings, such as an `X-POSTHOG-SESSION-ID` header
-forwarded from PostHog JS so backend events link to the matching Session Replay timeline.
+Session IDs must be valid UUIDv7 strings. Forward PostHog JS's `X-POSTHOG-SESSION-ID` header here to link backend events to Session Replay.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`session_id` | `str` | The session ID to associate with the current context and its children | *required*
+Name | Description
+---- | -----------
+`session_id` | `str`. The session ID to associate with the current context and its children. Required.
 
 **Examples:**
 
 ```python
 from posthog import set_context_session
-set_context_session("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")
+set_context_session("session_123")
 ```
 
 ### `posthog.set_context_device_id`
@@ -2278,14 +2117,13 @@ set_context_session("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")
 set_context_device_id(device_id: str)
 ```
 
-Set the device ID for the current context, associating all feature flag requests
-in this or child contexts with the given device ID.
+Set the device ID for the current context, associating all feature flag requests in this or child contexts with the given device ID.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`device_id` | `str` | The device ID to associate with the current context and its children | *required*
+Name | Description
+---- | -----------
+`device_id` | `str`. The device ID to associate with the current context and its children. Required.
 
 **Examples:**
 
@@ -2304,9 +2142,9 @@ Identify the current context with a distinct ID.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `str` | The distinct ID to associate with the current context and its children | *required*
+Name | Description
+---- | -----------
+`distinct_id` | `str`. The distinct ID to associate with the current context and its children. Required.
 
 **Examples:**
 
@@ -2325,9 +2163,9 @@ Override code-variable capture for exceptions in the current context.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`enabled` | `bool` | Whether exceptions captured in this context should include local variable values from stack frames. | *required*
+Name | Description
+---- | -----------
+`enabled` | `bool`. Whether exceptions captured in this context should include local variable values from stack frames. Required.
 
 ### `posthog.set_code_variables_mask_patterns_context`
 
@@ -2339,9 +2177,9 @@ Override code-variable mask patterns for exceptions in the current context.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`mask_patterns` | `list[str]` | Variable-name patterns whose values should be replaced with `***` when code variables are captured. | *required*
+Name | Description
+---- | -----------
+`mask_patterns` | `list[str]`. Variable-name patterns whose values should be replaced with `***` when code variables are captured. Required.
 
 ### `posthog.set_code_variables_ignore_patterns_context`
 
@@ -2353,9 +2191,9 @@ Override code-variable ignore patterns for exceptions in the current context.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`ignore_patterns` | `list[str]` | Variable-name patterns that should be omitted entirely when code variables are captured. | *required*
+Name | Description
+---- | -----------
+`ignore_patterns` | `list[str]`. Variable-name patterns that should be omitted entirely when code variables are captured. Required.
 
 ### `posthog.set_code_variables_mask_url_credentials_context`
 
@@ -2363,8 +2201,7 @@ Name | Type | Description | Default
 set_code_variables_mask_url_credentials_context(enabled: bool)
 ```
 
-Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from
-captured code variables for the current context.
+Whether to scrub credentials embedded in URLs/DSNs (e.g. user:pass@host) from captured code variables for the current context.
 
 ### `posthog.set_code_variables_detect_secrets_context`
 
@@ -2372,9 +2209,7 @@ captured code variables for the current context.
 set_code_variables_detect_secrets_context(enabled: bool)
 ```
 
-Whether to apply entropy-based secret detection as a last-resort redaction of
-high-entropy values (API keys, tokens, strong passwords) in captured code
-variables for the current context.
+Whether to apply entropy-based secret detection as a last-resort redaction of high-entropy values (API keys, tokens, strong passwords) in captured code variables for the current context.
 
 ### `posthog.tag`
 
@@ -2386,10 +2221,10 @@ Add a tag to the current context.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`name` | `str` | The tag key | *required*
-`value` | `Any` | The tag value | *required*
+Name | Description
+---- | -----------
+`name` | `str`. The tag key. Required.
+`value` | `Any`. The tag value. Required.
 
 **Examples:**
 
@@ -2420,19 +2255,14 @@ set_context_option(key: str, value: Any) -> None
 
 Set a capture option for every event captured within the current context.
 
-Context options fill options an event leaves unset, before `before_send`
-runs, so the hook sees them. They override `super_options`. An event's
-own `options` override them, and `before_send` can change them. They
-never set `process_person_profile` on identify-style events, such as
-`$identify` or `$set`, whose distinct ID the SDK did not generate:
-those default it to `True`.
+Context options fill options an event leaves unset, before `before_send` runs, so the hook sees them. They override `super_options`. An event's own `options` override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The option name, such as `"process_person_profile"` | *required*
-`value` | `Any` | The option value, sent as given | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The option name, such as `"process_person_profile"`. Required.
+`value` | `Any`. The option value, sent as given. Required.
 
 **Examples:**
 
@@ -2466,10 +2296,10 @@ Capture anything a user does within your system.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`event` | `str` | The event name to specify the event | *required*
-`**kwargs` | `Unpack[OptionalCaptureArgs]` | Optional arguments including: distinct_id: Unique identifier for the user properties: Dict of event properties timestamp: When the event occurred. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this event. If omitted, one is generated     and returned. If provided, it must be a valid UUID string or     uuid.UUID instance; invalid values are ignored and replaced with     a newly generated UUID. groups: Dict of group types and IDs flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The     exact values from the snapshot are attached with no extra /flags     request. send_feature_flags: Deprecated. Prefer flags=... from     evaluate_flags(). When truthy, evaluates flags during capture and     attaches them to the event. disable_geoip: Whether to disable GeoIP lookup | `{}`
+Name | Description
+---- | -----------
+`event` | `str`. The event name to specify the event. Required.
+`**kwargs` | `Unpack[OptionalCaptureArgs]`. Optional arguments including: distinct_id: Unique identifier for the user properties: Dict of event properties timestamp: When the event occurred. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this event. If omitted, one is generated     and returned. If provided, it must be a valid UUID string or     uuid.UUID instance; invalid values are ignored and replaced with     a newly generated UUID. groups: Dict of group types and IDs flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The     exact values from the snapshot are attached with no extra /flags     request. send_feature_flags: Deprecated. Prefer flags=... from     evaluate_flags(). When truthy, evaluates flags during capture and     attaches them to the event. disable_geoip: Whether to disable GeoIP lookup. Default: `{}`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2528,22 +2358,16 @@ capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Capture an AI event on the dedicated AI capture endpoint.
 
-Beta: the signature is stable; operational limits (per-event size cap,
-batching, endpoint) may change without notice.
+Beta: the signature is stable; operational limits (per-event size cap, batching, endpoint) may change without notice.
 
-Takes the same arguments and returns the same value as `capture()`: the
-event UUID, or None when the event was not admitted (disabled client, or
-dropped by `before_send`). The event is delivered on an isolated queue
-with its own consumer pool and a higher per-event size cap, posting to
-the dedicated AI ingestion endpoint. The payload is sent as given — no
-redaction or truncation is applied here.
+Takes the same arguments and returns the same value as `capture()`: the event UUID, or None when the event was not admitted (disabled client, or dropped by `before_send`). The event is delivered on an isolated queue with its own consumer pool and a higher per-event size cap, posting to the dedicated AI ingestion endpoint. The payload is sent as given — no redaction or truncation is applied here.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`event` | `str` | The event name, normally one of the `$ai_*` event names. | *required*
-`**kwargs` | `Unpack[OptionalCaptureArgs]` | Same optional arguments as `capture()`. | `{}`
+Name | Description
+---- | -----------
+`event` | `str`. The event name, normally one of the `$ai_*` event names. Required.
+`**kwargs` | `Unpack[OptionalCaptureArgs]`. Same optional arguments as `capture()`. Default: `{}`.
 
 **Examples:**
 
@@ -2567,9 +2391,9 @@ Set properties on a user record.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`**kwargs` | `Unpack[OptionalSetArgs]` | Optional arguments including: distinct_id: Unique identifier for the user. Falls back to the     context distinct ID; if none exists, this call does nothing. properties: Dict of person properties to set. timestamp: When the properties were set. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this operation. If omitted, one is     generated and returned. If provided, it must be a valid UUID     string or uuid.UUID instance; invalid values are ignored and     replaced with a newly generated UUID. disable_geoip: Whether to disable GeoIP lookup. | `{}`
+Name | Description
+---- | -----------
+`**kwargs` | `Unpack[OptionalSetArgs]`. Optional arguments including: distinct_id: Unique identifier for the user. Falls back to the     context distinct ID; if none exists, this call does nothing. properties: Dict of person properties to set. timestamp: When the properties were set. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this operation. If omitted, one is     generated and returned. If provided, it must be a valid UUID     string or uuid.UUID instance; invalid values are ignored and     replaced with a newly generated UUID. disable_geoip: Whether to disable GeoIP lookup. Default: `{}`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2596,9 +2420,9 @@ Set properties on a user record, only if they do not yet exist.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`**kwargs` | `Unpack[OptionalSetArgs]` | Optional arguments including: distinct_id: Unique identifier for the user. Falls back to the     context distinct ID; if none exists, this call does nothing. properties: Dict of person properties to set only once. timestamp: When the properties were set. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this operation. If omitted, one is     generated and returned. If provided, it must be a valid UUID     string or uuid.UUID instance; invalid values are ignored and     replaced with a newly generated UUID. disable_geoip: Whether to disable GeoIP lookup. | `{}`
+Name | Description
+---- | -----------
+`**kwargs` | `Unpack[OptionalSetArgs]`. Optional arguments including: distinct_id: Unique identifier for the user. Falls back to the     context distinct ID; if none exists, this call does nothing. properties: Dict of person properties to set only once. timestamp: When the properties were set. UTC is preferred; non-UTC     datetimes and parseable ISO timestamp strings are converted to UTC. uuid: Unique identifier for this operation. If omitted, one is     generated and returned. If provided, it must be a valid UUID     string or uuid.UUID instance; invalid values are ignored and     replaced with a newly generated UUID. disable_geoip: Whether to disable GeoIP lookup. Default: `{}`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2626,16 +2450,16 @@ Set properties on a group.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`group_type` | `str` | Type of your group. Required - the call is dropped with a warning if it is missing or empty. | *required*
-`group_key` | `str` | Unique identifier of the group. Required - the call is dropped with a warning if it is missing or empty. | *required*
-`properties` | `Optional[Dict[str, Any]]` | Properties to set on the group | `None`
-`timestamp` | `Optional[Union[datetime, str]]` | Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
-`uuid` | `Optional[str]` | Optional UUID for the event | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`distinct_id` | `Optional[ID_TYPES]` | Optional distinct ID of the user performing the action | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
+Name | Description
+---- | -----------
+`group_type` | `str`. Type of your group. Required - the call is dropped with a warning if it is missing or empty. Required.
+`group_key` | `str`. Unique identifier of the group. Required - the call is dropped with a warning if it is missing or empty. Required.
+`properties` | `Optional[Dict[str, Any]]`. Properties to set on the group. Default: `None`.
+`timestamp` | `Optional[Union[datetime, str]]`. Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. Default: `None`.
+`uuid` | `Optional[str]`. Optional UUID for the event. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`distinct_id` | `Optional[ID_TYPES]`. Optional distinct ID of the user performing the action. Default: `None`.
+`options` | `Optional[Dict[str, Any]]`. Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. Default: `None`.
 
 **Examples:**
 
@@ -2658,14 +2482,14 @@ Associate user behaviour before and after they e.g. register, login, or perform 
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`previous_id` | `ID_TYPES` | The unique ID of the user before | *required*
-`distinct_id` | `str` | The current unique id | *required*
-`timestamp` | `Optional[Union[datetime, str]]` | Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
-`uuid` | `Optional[str]` | Optional UUID for the event | `None`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
+Name | Description
+---- | -----------
+`previous_id` | `ID_TYPES`. The unique ID of the user before. Required.
+`distinct_id` | `str`. The current unique id. Required.
+`timestamp` | `Optional[Union[datetime, str]]`. Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. Default: `None`.
+`uuid` | `Optional[str]`. Optional UUID for the event. Default: `None`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`options` | `Optional[Dict[str, Any]]`. Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. Default: `None`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2692,11 +2516,11 @@ Capture exceptions that happen in your code.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`exception` | `Optional[ExceptionArg]` | The exception to capture. If not provided, the current exception is captured via `sys.exc_info()` | `None`
-`level` | `Optional[str]` | The `$exception_level`, such as `"warning"` or `"fatal"`. Defaults to `"error"`. An unknown value counts as unset. | `None`
-`**kwargs` | `Unpack[OptionalCaptureArgs]` | Optional capture arguments including distinct_id, properties, timestamp, uuid, groups, flags, send_feature_flags, disable_geoip, and options. Reserved exception properties in `properties`, such as `$exception_list` and `$exception_level`, are ignored. | `{}`
+Name | Description
+---- | -----------
+`exception` | `Optional[ExceptionArg]`. The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`. Default: `None`.
+`level` | `Optional[str]`. The `$exception_level`, such as `"warning"` or `"fatal"`. Defaults to `"error"`. An unknown value counts as unset. Default: `None`.
+`**kwargs` | `Unpack[OptionalCaptureArgs]`. Optional capture arguments including distinct_id, properties, timestamp, uuid, groups, flags, send_feature_flags, disable_geoip, and options. Reserved exception properties in `properties`, such as `$exception_list` and `$exception_level`, are ignored. Default: `{}`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2724,23 +2548,21 @@ feature_enabled(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, U
 
 Use feature flags to enable or disable features for users.
 
-`feature_enabled` is deprecated and will be removed in a future major version. Use
-`posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
-consolidates flag evaluation into a single `/flags` request per incoming request.
+`feature_enabled` is deprecated and will be removed in a future major version. Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key | *required*
-`distinct_id` | `ID_TYPES` | The user's distinct ID | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Groups mapping | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally | `False`
-`send_feature_flag_events` | `bool` | Whether to send feature flag events | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Groups mapping. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send feature flag events. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2767,23 +2589,21 @@ get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, 
 
 Get feature flag variant for users. Used with experiments.
 
-`get_feature_flag` is deprecated and will be removed in a future major version. Use
-`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
-consolidates flag evaluation into a single `/flags` request per incoming request.
+`get_feature_flag` is deprecated and will be removed in a future major version. Use `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key | *required*
-`distinct_id` | `ID_TYPES` | The user's distinct ID | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Groups mapping from group type to group key | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties in format { group_type_name: { group_properties } } | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally | `False`
-`send_feature_flag_events` | `bool` | Whether to send feature flag events | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Groups mapping from group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties in format { group_type_name: { group_properties } }. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send feature flag events. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2812,16 +2632,16 @@ Get all flags for a given user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The user's distinct ID | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Groups mapping | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | Optional list of flag keys to evaluate (evaluates all if None) | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Groups mapping. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. Optional list of flag keys to evaluate (evaluates all if None). Default: `None`.
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -2855,17 +2675,17 @@ This method evaluates a feature flag and returns a FeatureFlagResult object cont
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The user's distinct ID. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties to use for evaluation. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type. | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally. | `False`
-`send_feature_flag_events` | `bool` | Whether to send a $feature_flag_called event. | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Mapping of group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties to use for evaluation. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties keyed by group type. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send a $feature_flag_called event. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
 
 Example:
 ```python
@@ -2884,23 +2704,22 @@ get_feature_flag_payload(key: str, distinct_id: ID_TYPES, match_value: Optional[
 
 Get the payload associated with a feature flag value.
 
-Deprecated for new code. Prefer `evaluate_flags()` and
-`flags.get_flag_payload(key)` so flag evaluation happens once per request.
+Deprecated for new code. Prefer `evaluate_flags()` and `flags.get_flag_payload(key)` so flag evaluation happens once per request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`distinct_id` | `ID_TYPES` | The user's distinct ID. | *required*
-`match_value` | `Optional[FlagValue]` | Optional flag value to use when selecting a payload. | `None`
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties to use for evaluation. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type. | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally. | `False`
-`send_feature_flag_events` | `bool` | Whether to send a $feature_flag_called event. | `True`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags. | `None`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`match_value` | `Optional[FlagValue]`. Optional flag value to use when selecting a payload. Default: `None`.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Mapping of group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties to use for evaluation. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties keyed by group type. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether to send a $feature_flag_called event. Default: `True`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
 
 **Returns:**
 
@@ -2918,9 +2737,9 @@ Get the payload for a remote config feature flag.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The key of the feature flag | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The key of the feature flag. Required.
 
 **Returns:**
 
@@ -2945,16 +2764,16 @@ Get all feature flag values and payloads for a user.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `ID_TYPES` | The user's distinct ID. | *required*
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties to use for evaluation. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type. | `None`
-`only_evaluate_locally` | `bool` | Whether to evaluate only locally. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
-`device_id` | `Optional[str]` | Optional device ID override for experience-continuity flags. | `None`
-`flag_keys_to_evaluate` | `Optional[list[str]]` | Optional list of flag keys to evaluate. Evaluates all flags when omitted. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `ID_TYPES`. The user's distinct ID. Required.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Mapping of group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties to use for evaluation. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties keyed by group type. Default: `None`.
+`only_evaluate_locally` | `bool`. Whether to evaluate only locally. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override for experience-continuity flags. Default: `None`.
+`flag_keys_to_evaluate` | `Optional[list[str]]`. Optional list of flag keys to evaluate. Evaluates all flags when omitted. Default: `None`.
 
 **Returns:**
 
@@ -2968,27 +2787,22 @@ Type | Description
 evaluate_flags(distinct_id: Optional[ID_TYPES] = None, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 ```
 
-Evaluate all feature flags for a user in a single call and return a
-`FeatureFlagEvaluations` snapshot. Branch on `.is_enabled()` /
-`.get_flag()` and pass the same snapshot to `capture()` via the
-`flags` option so events carry the exact flag values the code branched on.
+Evaluate all feature flags for a user in a single call and return a `FeatureFlagEvaluations` snapshot. Branch on `.is_enabled()` / `.get_flag()` and pass the same snapshot to `capture()` via the `flags` option so events carry the exact flag values the code branched on.
 
-Prefer this over repeated `get_feature_flag()` calls and over
-`capture(send_feature_flags=True)` — it consolidates flag evaluation into
-a single `/flags` request per incoming request.
+Prefer this over repeated `get_feature_flag()` calls and over `capture(send_feature_flags=True)` — it consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` | `Optional[ID_TYPES]` | The user's distinct ID. If `None`, falls back to the context distinct_id. If still unresolvable, returns an empty snapshot. | `None`
-`groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties to use for evaluation. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type. | `None`
-`only_evaluate_locally` | `bool` | If `True`, never fall back to remote evaluation and omit flags that cannot be evaluated locally. The snapshot's `unresolved_flags` lists them with a reason. | `False`
-`disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
-`flag_keys` | `Optional[list[str]]` | Optional list that scopes local evaluation, the underlying `/flags` request, and the returned snapshot. When omitted or `None`, all flags are evaluated. An empty list returns an empty snapshot without evaluating flags. A requested key absent from loaded local definitions is included in one remote fallback per `evaluate_flags` call unless `only_evaluate_locally` is `True`. If the server also does not know the key, it is omitted from the snapshot. | `None`
-`device_id` | `Optional[str]` | Optional device ID override. If not provided, falls back to the context device_id (which may be set via tracing headers). Used by experience-continuity flags to match users across distinct_id changes. | `None`
+Name | Description
+---- | -----------
+`distinct_id` | `Optional[ID_TYPES]`. The user's distinct ID. If `None`, falls back to the context distinct_id. If still unresolvable, returns an empty snapshot. Default: `None`.
+`groups` | `Optional[Mapping[str, Union[str, int]]]`. Mapping of group type to group key. Default: `None`.
+`person_properties` | `Optional[Dict[str, Any]]`. Person properties to use for evaluation. Default: `None`.
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]`. Group properties keyed by group type. Default: `None`.
+`only_evaluate_locally` | `bool`. If `True`, never fall back to remote evaluation and omit flags that cannot be evaluated locally. The snapshot's `unresolved_flags` lists them with a reason. Default: `False`.
+`disable_geoip` | `Optional[bool]`. Whether to disable GeoIP lookup. Default: `None`.
+`flag_keys` | `Optional[list[str]]`. Optional list that scopes local evaluation, the underlying `/flags` request, and the returned snapshot. When omitted or `None`, all flags are evaluated. An empty list returns an empty snapshot without evaluating flags. A requested key absent from loaded local definitions is included in one remote fallback per `evaluate_flags` call unless `only_evaluate_locally` is `True`. If the server also does not know the key, it is omitted from the snapshot. Default: `None`.
+`device_id` | `Optional[str]`. Optional device ID override. If not provided, falls back to the context device_id (which may be set via tracing headers). Used by experience-continuity flags to match users across distinct_id changes. Default: `None`.
 
 **Examples:**
 
@@ -3033,10 +2847,7 @@ Return where a locally loaded feature flag is meant to be evaluated.
 <details class="details" open markdown="1">
 <summary>Details</summary>
 
-Reads the `evaluation_runtime` each flag definition carries, so no extra
-request is made. Returns `None` when local evaluation has not loaded a
-definition for this key. A definition that carries no runtime reports
-`FeatureFlagEvaluationRuntime.ALL`, the default PostHog applies.
+Reads the `evaluation_runtime` each flag definition carries, so no extra request is made. Returns `None` when local evaluation has not loaded a definition for this key. A definition that carries no runtime reports `FeatureFlagEvaluationRuntime.ALL`, the default PostHog applies.
 
 </details>
 
@@ -3058,10 +2869,7 @@ Return the keys of locally loaded flags that a runtime can evaluate.
 <details class="details" open markdown="1">
 <summary>Details</summary>
 
-A flag set to `FeatureFlagEvaluationRuntime.ALL` suits either runtime, so
-it is returned for `CLIENT` and for `SERVER`. Use this to decide which
-flags to hand to a browser when a backend serves flags to its own
-frontend.
+A flag set to `FeatureFlagEvaluationRuntime.ALL` suits either runtime, so it is returned for `CLIENT` and for `SERVER`. Use this to decide which flags to hand to a browser when a backend serves flags to its own frontend.
 
 </details>
 
@@ -3095,21 +2903,15 @@ flush(timeout_seconds: Optional[float] = 10) -> None
 
 Attempt immediate delivery of queued events and ended spans, keeping the global client reusable.
 
-Call `flush()` before a short-lived request or serverless invocation returns
-when using the shared module-level client. Use `shutdown()` only for final
-process cleanup or a client that will not be reused. Flush does not stop the
-background workers or feature flag poller, and does not end open spans.
+Call `flush()` before a short-lived request or serverless invocation returns when using the shared module-level client. Use `shutdown()` only for final process cleanup or a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.
 
-Returning does not guarantee server receipt: pending work can remain after a
-timeout or span export failure, and failed events may be dropped by consumers.
-Calls made directly from SDK callbacks such as `on_error` are deferred
-rather than blocking the worker that invoked the callback.
+Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by consumers. Calls made directly from SDK callbacks such as `on_error` are deferred rather than blocking the worker that invoked the callback.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`timeout_seconds` | `Optional[float]` | Seconds to wait for event queues to drain, shared across event lanes. Defaults to 10 seconds. Pass `None` to wait without a time limit; this does not guarantee successful delivery. Queued spans flush concurrently, waiting up to this many seconds for an in-flight flush before starting a fresh drain budget. A lock wait timeout leaves the in-flight flush to finish. At least one span request is attempted after acquiring the lock, even with no budget left; retriable failures are retried after backoff while budget remains, with one last attempt at the deadline. The last span request is not cut short and is bounded by the client's `timeout` in seconds, so this is not a strict wall-clock limit for the whole call. With `None`, a retriable span failure is left for a later flush rather than retried within this call. | `10`
+Name | Description
+---- | -----------
+`timeout_seconds` | `Optional[float]`. Seconds to wait for event queues to drain, shared across event lanes. Defaults to 10 seconds. Pass `None` to wait without a time limit; this does not guarantee successful delivery. Queued spans flush concurrently, waiting up to this many seconds for an in-flight flush before starting a fresh drain budget. A lock wait timeout leaves the in-flight flush to finish. At least one span request is attempted after acquiring the lock, even with no budget left; retriable failures are retried after backoff while budget remains, with one last attempt at the deadline. The last span request is not cut short and is bounded by the client's `timeout` in seconds, so this is not a strict wall-clock limit for the whole call. With `None`, a retriable span failure is left for a later flush rather than retried within this call. Default: `10`.
 
 **Examples:**
 
@@ -3128,9 +2930,7 @@ join() -> None
 
 Attempt to process queued events and stop the client's background workers. Use `shutdown()` directly in most cases.
 
-Failed or undrainable events may be dropped and reported through logging or
-`on_error`; returning does not guarantee server receipt. Lifecycle cleanup
-is attempted once, and cleanup failures are logged without retry.
+Failed or undrainable events may be dropped and reported through logging or `on_error`; returning does not guarantee server receipt. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry.
 
 **Examples:**
 
@@ -3147,22 +2947,18 @@ start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mappin
 
 Start a span for distributed tracing. Alpha.
 
-Returns a span handle. Use it as a context manager to make it the active
-span for the block and end it on exit (recording a raised exception on the
-way out); or call `end()` yourself for a span that cannot wrap a block.
-Spans started inside the block nest under it automatically. Always returns
-a usable handle, even when tracing is off, so calling code never branches.
+Returns a span handle. Use it as a context manager to make it the active span for the block and end it on exit (recording a raised exception on the way out); or call `end()` yourself for a span that cannot wrap a block. Spans started inside the block nest under it automatically. Always returns a usable handle, even when tracing is off, so calling code never branches.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`name` | `str` | A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. | *required*
-`kind` | `Optional[str]` | `internal` (default), `server`, `client`, `producer` or `consumer`. | `None`
-`attributes` | `Optional[Mapping[str, Any]]` | Initial attributes. | `None`
-`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. | `None`
-`tracestate` | `Optional[str]` | The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. | `None`
-`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. | `None`
+Name | Description
+---- | -----------
+`name` | `str`. A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. Required.
+`kind` | `Optional[str]`. `internal` (default), `server`, `client`, `producer` or `consumer`. Default: `None`.
+`attributes` | `Optional[Mapping[str, Any]]`. Initial attributes. Default: `None`.
+`parent` | `Union[Span, str, None]`. A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. Default: `None`.
+`tracestate` | `Optional[str]`. The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. Default: `None`.
+`start_time` | `Union[datetime, float, None]`. A `datetime` or epoch seconds, to backdate the span. Default: `None`.
 
 **Examples:**
 
@@ -3185,9 +2981,7 @@ get_active_span() -> Optional[Span]
 
 The span that is active in the current context, or `None`. Alpha.
 
-Only entering a span (`with posthog.start_span(...) as span:`) makes it
-active; a span started manually is not. Use it to propagate the trace to
-the next service: `span.traceparent()` is the header value.
+Only entering a span (`with posthog.start_span(...) as span:`) makes it active; a span started manually is not. Use it to propagate the trace to the next service: `span.traceparent()` is the header value.
 
 **Examples:**
 
@@ -3205,25 +2999,9 @@ shutdown() -> None
 
 Attempt final delivery and permanently shut down the global client.
 
-Call this for final process cleanup, not at the end of each request or
-serverless invocation that shares the module-level client. Use `flush()`
-before returning from those invocations instead. Shutdown closes capture
-lanes, stops background workers and the feature flag poller, and tears down
-integrations. The global client is not recreated automatically after shutdown.
+Call this for final process cleanup, not at the end of each request or serverless invocation that shares the module-level client. Use `flush()` before returning from those invocations instead. Shutdown closes capture lanes, stops background workers and the feature flag poller, and tears down integrations. The global client is not recreated automatically after shutdown.
 
-This normally blocks until queued events have been attempted and cleanup
-finishes. Failed or undrainable events may be dropped and reported through
-logging or `on_error`; returning does not guarantee server receipt. Event
-draining has no timeout. Queued spans get a final flush with up to 30 seconds
-waiting for an in-flight flush, then a fresh 30-second drain budget; the last
-HTTP request is not cut short. Unsent queued spans and still-open spans are
-discarded with a warning.
-Lifecycle cleanup is attempted once, and cleanup failures are logged without
-retry. Calls made directly from SDK callbacks such as `on_error` are deferred
-to avoid deadlocking the worker. If blocking completion is required, signal an application-owned
-thread, return from the callback, and call `shutdown()` from that thread.
-Do not wait inside a callback for another thread or task calling a lifecycle
-method.
+This normally blocks until queued events have been attempted and cleanup finishes. Failed or undrainable events may be dropped and reported through logging or `on_error`; returning does not guarantee server receipt. Event draining has no timeout. Queued spans get a final flush with up to 30 seconds waiting for an in-flight flush, then a fresh 30-second drain budget; the last HTTP request is not cut short. Unsent queued spans and still-open spans are discarded with a warning. Lifecycle cleanup is attempted once, and cleanup failures are logged without retry. Calls made directly from SDK callbacks such as `on_error` are deferred to avoid deadlocking the worker. If blocking completion is required, signal an application-owned thread, return from the callback, and call `shutdown()` from that thread. Do not wait inside a callback for another thread or task calling a lifecycle method.
 
 **Examples:**
 
@@ -3240,9 +3018,7 @@ setup() -> Client
 
 Create or return the global PostHog client configured by module settings.
 
-Most applications should either instantiate `Posthog` directly or set
-`posthog.api_key`/other module settings before calling top-level helpers.
-`setup()` is called automatically by global APIs such as `capture()`.
+Most applications should either instantiate `Posthog` directly or set `posthog.api_key`/other module settings before calling top-level helpers. `setup()` is called automatically by global APIs such as `capture()`.
 
 **Returns:**
 
@@ -3260,17 +3036,17 @@ Optional arguments for the capture method.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` |  | Unique identifier for the person associated with this event. If not set, the context distinct_id is used, if available, otherwise a UUID is generated, and the event is marked as personless. Setting context-level distinct_id's is recommended. | 
-`properties` |  | Dictionary of properties to track with the event | 
-`timestamp` |  | When the event occurred (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
-`uuid` |  | Unique identifier for this specific event. If not provided, one is generated. The event UUID is returned, so you can correlate it with actions in your app (like showing users an error ID if you capture an exception). If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
-`groups` |  | Group identifiers to associate with this event (format: {group_type: group_key}) | 
-`flags` |  | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. The exact flag values from the snapshot are attached to the event with no additional network call — prefer this over `send_feature_flags`. | 
-`send_feature_flags` |  | Deprecated — prefer `flags` with a `FeatureFlagEvaluations` snapshot. Whether to include currently active feature flags in the event properties. Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a hidden `/flags` request on capture and may return different values than the ones the code branched on. | 
-`disable_geoip` |  | Whether to disable GeoIP lookup for this event. Defaults to False. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
+Name | Description
+---- | -----------
+`distinct_id` | Unique identifier for the person associated with this event. If not set, the context distinct_id is used, if available, otherwise a UUID is generated, and the event is marked as personless. Setting context-level distinct_id's is recommended.
+`properties` | Dictionary of properties to track with the event
+`timestamp` | When the event occurred (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC.
+`uuid` | Unique identifier for this specific event. If not provided, one is generated. The event UUID is returned, so you can correlate it with actions in your app (like showing users an error ID if you capture an exception). If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
+`groups` | Group identifiers to associate with this event (format: {group_type: group_key})
+`flags` | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. The exact flag values from the snapshot are attached to the event with no additional network call — prefer this over `send_feature_flags`.
+`send_feature_flags` | Deprecated — prefer `flags` with a `FeatureFlagEvaluations` snapshot. Whether to include currently active feature flags in the event properties. Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a hidden `/flags` request on capture and may return different values than the ones the code branched on.
+`disable_geoip` | Whether to disable GeoIP lookup for this event. Defaults to False.
+`options` | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID.
 
 **Attributes:**
 
@@ -3348,10 +3124,7 @@ FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flag
 
 A point-in-time snapshot of feature flag evaluations for a single distinct_id.
 
-Returned by `Client.evaluate_flags` — branch on `is_enabled` /
-`get_flag` and pass the same object to `Client.capture` via the
-`flags` option so the captured event carries the exact flag values the code
-branched on.
+Returned by `Client.evaluate_flags` — branch on `is_enabled` / `get_flag` and pass the same object to `Client.capture` via the `flags` option so the captured event carries the exact flag values the code branched on.
 
 ```python
 flags = posthog.evaluate_flags(distinct_id, person_properties={"plan": "enterprise"})
@@ -3360,16 +3133,9 @@ if flags.is_enabled("new-dashboard"):
 posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
 ```
 
-To narrow the set of flags that get attached to a captured event, use the in-memory
-helpers `only` and `only_accessed`. To narrow the set of flags requested
-from the server in the first place, pass `flag_keys` to `Client.evaluate_flags`.
+To narrow the set of flags that get attached to a captured event, use the in-memory helpers `only` and `only_accessed`. To narrow the set of flags requested from the server in the first place, pass `flag_keys` to `Client.evaluate_flags`.
 
-Reading a flag sends `$feature_flag_called`, deduplicated as `is_enabled`
-describes. When the flag was evaluated remotely and its config version 2 record is
-a complete experiment split (an experiment rule with a rule ID and a variant key),
-the read also sends `$experiment_exposure`. The SDK sends one exposure per
-distinct ID, groups, flag, rule and variant. `send_feature_flag_events=False`
-suppresses both events.
+Reading a flag sends `$feature_flag_called`, deduplicated as `is_enabled` describes. When the flag was evaluated remotely and its config version 2 record is a complete experiment split (an experiment rule with a rule ID and a variant key), the read also sends `$experiment_exposure`. The SDK sends one exposure per distinct ID, groups, flag, rule and variant. `send_feature_flag_events=False` suppresses both events.
 
 **Functions:**
 
@@ -3398,13 +3164,9 @@ get_flag(key: str, *, send_feature_flag_events: bool = True) -> Optional[FlagVal
 
 Return the flag value. Fires `$feature_flag_called` on first access.
 
-Returns the variant string for multivariate flags, `True` for enabled flags
-without a variant, `False` for disabled flags, and `None` for flags that
-were not returned or whose remote record was marked failed by the server.
-An unreadable remote record retains its disabled (`False`) result.
+Returns the variant string for multivariate flags, `True` for enabled flags without a variant, `False` for disabled flags, and `None` for flags that were not returned or whose remote record was marked failed by the server. An unreadable remote record retains its disabled (`False`) result.
 
-Pass `send_feature_flag_events=False` to skip the event for this read, as
-with `is_enabled`.
+Pass `send_feature_flag_events=False` to skip the event for this read, as with `is_enabled`.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload`
 
@@ -3422,19 +3184,17 @@ Does not count as an access for `only_accessed` and does not fire any event.
 is_enabled(key: str, default_value: bool = False, *, send_feature_flag_events: bool = True) -> bool
 ```
 
-Return whether the flag is enabled. Fires `$feature_flag_called` on the
-first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
+Return whether the flag is enabled. Fires `$feature_flag_called` on the first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The feature flag key. | *required*
-`default_value` | `bool` | Returned when the flag has no value in this evaluation — the key was not part of the evaluated set, the server marked its record failed, or the evaluation itself came back empty (failed `/flags` request, quota limit, or no resolvable `distinct_id`). Defaults to `False`. | `False`
-`send_feature_flag_events` | `bool` | Whether this read sends `$feature_flag_called`. When `False`, no event is sent and the dedupe cache is left alone, but the key still counts as accessed for `only_accessed`. | `True`
+Name | Description
+---- | -----------
+`key` | `str`. The feature flag key. Required.
+`default_value` | `bool`. Returned when the flag has no value in this evaluation — the key was not part of the evaluated set, the server marked its record failed, or the evaluation itself came back empty (failed `/flags` request, quota limit, or no resolvable `distinct_id`). Defaults to `False`. Default: `False`.
+`send_feature_flag_events` | `bool`. Whether this read sends `$feature_flag_called`. When `False`, no event is sent and the dedupe cache is left alone, but the key still counts as accessed for `only_accessed`. Default: `True`.
 
-A flag that has a value always wins over `default_value`, including a
-disabled flag, which returns `False` even when `default_value=True`.
+A flag that has a value always wins over `default_value`, including a disabled flag, which returns `False` even when `default_value=True`.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.keys`
 
@@ -3450,10 +3210,7 @@ Return the flag keys that are part of this evaluation.
 only(keys: List[str]) -> FeatureFlagEvaluations
 ```
 
-Return a filtered copy containing only flags with the given keys. Keys that
-are not present in the evaluation are dropped and logged as a warning.
-Selected failures retain private diagnostics but remain absent from values,
-keys and enrichment; their existing missing-value warning is unchanged.
+Return a filtered copy containing only flags with the given keys. Keys that are not present in the evaluation are dropped and logged as a warning. Selected failures retain private diagnostics but remain absent from values, keys and enrichment; their existing missing-value warning is unchanged.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed`
 
@@ -3461,12 +3218,9 @@ keys and enrichment; their existing missing-value warning is unchanged.
 only_accessed() -> FeatureFlagEvaluations
 ```
 
-Return a filtered copy containing only flags accessed via `is_enabled`
-or `get_flag` before this call.
+Return a filtered copy containing only flags accessed via `is_enabled` or `get_flag` before this call.
 
-Order-dependent: if nothing has been accessed yet, the returned snapshot is
-empty. The method honors its name — pre-access if you want a populated result.
-Accessed failures retain private diagnostics, not values or enrichment.
+Order-dependent: if nothing has been accessed yet, the returned snapshot is empty. The method honors its name — pre-access if you want a populated result. Accessed failures retain private diagnostics, not values or enrichment.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.unresolved_flags`
 
@@ -3474,18 +3228,9 @@ Accessed failures retain private diagnostics, not values or enrichment.
 unresolved_flags: Mapping[str, UnresolvedFlagReason]
 ```
 
-Return a read-only mapping of flag key to the reason local evaluation
-left it without a value.
+Return a read-only mapping of flag key to the reason local evaluation left it without a value.
 
-A flag is listed when it has a loaded local definition, was in the requested
-scope, was inconclusive locally, and no remote value filled the gap. Listed
-flags are not part of `keys`, and reading one reports the
-`local_evaluation_inconclusive` error instead of `flag_missing`.
-A server-marked failed fallback additionally reports `evaluation_failed`.
-Reading this mapping does not count as an access and does not fire any event.
-Snapshots returned by `only` and `only_accessed`, and by
-`AsyncClient.evaluate_flags()`, which evaluates only remotely, carry no
-entries.
+A flag is listed when it has a loaded local definition, was in the requested scope, was inconclusive locally, and no remote value filled the gap. Listed flags are not part of `keys`, and reading one reports the `local_evaluation_inconclusive` error instead of `flag_missing`. A server-marked failed fallback additionally reports `evaluation_failed`. Reading this mapping does not count as an access and does not fire any event. Snapshots returned by `only` and `only_accessed`, and by `AsyncClient.evaluate_flags()`, which evaluates only remotely, carry no entries.
 
 ### `FeatureFlagResult`
 
@@ -3529,10 +3274,10 @@ Create a FeatureFlagResult from a FeatureFlag object.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`details` | `Union[FeatureFlag, None]` | The FeatureFlag object to convert. | *required*
-`override_match_value` | `Optional[FlagValue]` | If provided, this value will be used to populate the enabled and variant fields instead of the values from the FeatureFlag. A server-marked failure returns None even when this override is provided. | `None`
+Name | Description
+---- | -----------
+`details` | `Union[FeatureFlag, None]`. The FeatureFlag object to convert. Required.
+`override_match_value` | `Optional[FlagValue]`. If provided, this value will be used to populate the enabled and variant fields instead of the values from the FeatureFlag. A server-marked failure returns None even when this override is provided. Default: `None`.
 
 **Returns:**
 
@@ -3550,11 +3295,11 @@ Creates a FeatureFlagResult from a flag value and payload.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`key` | `str` | The unique identifier of the feature flag. | *required*
-`value` | `Union[FlagValue, None]` | The value of the flag (string variant or boolean). | *required*
-`payload` | `Any` | Additional data associated with the feature flag. | *required*
+Name | Description
+---- | -----------
+`key` | `str`. The unique identifier of the feature flag. Required.
+`value` | `Union[FlagValue, None]`. The value of the flag (string variant or boolean). Required.
+`payload` | `Any`. Additional data associated with the feature flag. Required.
 
 **Returns:**
 
@@ -3568,8 +3313,7 @@ Type | Description
 get_value() -> FlagValue
 ```
 
-Returns the value of the flag. This is the variant if it exists, otherwise the enabled value.
-This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
+Returns the value of the flag. This is the variant if it exists, otherwise the enabled value. This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
 
 **Returns:**
 
@@ -3609,8 +3353,7 @@ FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[Fl
 
 Detailed feature flag evaluation returned by the flags API.
 
-`enabled`, `variant` and `metadata.payload` are the value rendered the way
-responses before `/flags?v=4` carried it, which the legacy getters return.
+`enabled`, `variant` and `metadata.payload` are the value rendered the way responses before `/flags?v=4` carried it, which the legacy getters return.
 
 **Attributes:**
 
@@ -3644,9 +3387,7 @@ from_json(resp: Any) -> FeatureFlag
 
 Parse one flag record of a `/flags` response.
 
-A record with a `value` member is a `/flags?v=4` record. A record
-without one comes from an older server: its value is `variant`, or
-`enabled` when there is no variant, and its config version is `1`.
+A record with a `value` member is a `/flags?v=4` record. A record without one comes from an older server: its value is `variant`, or `enabled` when there is no variant, and its config version is `1`.
 
 #### `posthog.types.FeatureFlag.from_value_and_payload`
 
@@ -3719,20 +3460,14 @@ Bases: `str`, `Enum`
 
 Why local evaluation left a flag without a value.
 
-Reported by `FeatureFlagEvaluations.unresolved_flags`. Inheriting from
-`str` keeps the members directly comparable to their string values. When more
-than one cause applies, the first reason in the order below is reported:
+Reported by `FeatureFlagEvaluations.unresolved_flags`. Inheriting from `str` keeps the members directly comparable to their string values. When more than one cause applies, the first reason in the order below is reported:
 
-- `EXPERIENCE_CONTINUITY`: The flag has experience continuity enabled, which
-  local evaluation never resolves. Change the flag to fix it.
-- `UNSUPPORTED_DEFINITION`: The flag uses something the local evaluator does not
-  support, such as a static cohort, an unknown operator or filter type, a
-  malformed value, a dependency with no loaded definition or a circular
-  dependency. Change the flag or upgrade the SDK to fix it.
-- `UNRESOLVED_DEPENDENCY`: A flag this flag depends on has a loaded definition
-  but was unresolved.
-- `MISSING_CONTEXT`: The call did not pass a property, group property or device
-  id the flag needs, or passed it in an unusable form. Pass it to fix it.
+| Reason | Cause |
+| --- | --- |
+| `EXPERIENCE_CONTINUITY` | The flag has experience continuity enabled, which local evaluation never resolves. Change the flag to fix it. |
+| `UNSUPPORTED_DEFINITION` | The flag uses something the local evaluator doesn't support, such as a static cohort, an unknown operator or filter type, a malformed value, a dependency with no loaded definition, or a circular dependency. Change the flag or upgrade the SDK to fix it. |
+| `UNRESOLVED_DEPENDENCY` | A flag this flag depends on has a loaded definition but was unresolved. |
+| `MISSING_CONTEXT` | The call didn't pass a property, group property, or device ID the flag needs, or passed it in an unusable form. Pass it to fix it. |
 
 **Attributes:**
 
@@ -3775,8 +3510,7 @@ InconclusiveMatchError(*args, reason: Optional[UnresolvedFlagReason] = None)
 
 Bases: `Exception`
 
-Raised when local evaluation can't determine a flag's value. `reason` says
-why, as reported by `FeatureFlagEvaluations.unresolved_flags`.
+Raised when local evaluation can't determine a flag's value. `reason` says why, as reported by `FeatureFlagEvaluations.unresolved_flags`.
 
 **Attributes:**
 
@@ -3798,11 +3532,9 @@ RequiresServerEvaluation(*args, reason: Optional[UnresolvedFlagReason] = None)
 
 Bases: `Exception`
 
-Raised when feature flag evaluation requires server-side data that is not
-available locally (e.g., static cohorts).
+Raised when feature flag evaluation requires server-side data that is not available locally (e.g., static cohorts).
 
-This error should propagate immediately to trigger API fallback, unlike
-InconclusiveMatchError which allows trying other conditions.
+This error should propagate immediately to trigger API fallback, unlike InconclusiveMatchError which allows trying other conditions.
 
 **Attributes:**
 
@@ -3826,17 +3558,11 @@ Bases: `APIError`
 
 A capture batch that was not fully delivered.
 
-Passed to `on_error` with the batch. `status` is the HTTP status of the
-last attempt, or `0` when no response arrived (`__cause__` holds the
-transport error). A 2xx `status` means the request succeeded but some
-events were dropped or ran out of retries.
+Passed to `on_error` with the batch. `status` is the HTTP status of the last attempt, or `0` when no response arrived (`__cause__` holds the transport error). A 2xx `status` means the request succeeded but some events were dropped or ran out of retries.
 
-`event_results` maps each event uuid to its last verdict from a 2xx
-response. Events missing from it never got a verdict, because every
-attempt that reached them failed as a whole request.
+`event_results` maps each event uuid to its last verdict from a 2xx response. Events missing from it never got a verdict, because every attempt that reached them failed as a whole request.
 
-`drops` lists each event the server dropped on a 2xx response as a
-`CaptureDroppedEvent`.
+`drops` lists each event the server dropped on a 2xx response as a `CaptureDroppedEvent`.
 
 **Functions:**
 
@@ -3918,26 +3644,15 @@ status = status
 verdict_summary() -> str
 ```
 
-Count the undelivered events by verdict and reason, for example
-`drop/llm_events_over_quota=2, retry/not_persisted=1`.
+Count the undelivered events by verdict and reason, for example `drop/llm_events_over_quota=2, retry/not_persisted=1`.
 
-Counts the events in `drops` and `retry_exhausted`: events the
-server dropped, and events still pending retry after the last 2xx
-response. A retry verdict followed by a failed request, for example a
-503 on the last attempt, is not counted; `event_results` keeps it.
-Empty when no event is counted.
+Counts the events in `drops` and `retry_exhausted`: events the server dropped, and events still pending retry after the last 2xx response. A retry verdict followed by a failed request, for example a 503 on the last attempt, is not counted; `event_results` keeps it. Empty when no event is counted.
 
 ### `Span`
 
 A handle to a span.
 
-Every method is safe to call on any handle, including after `end()` and
-on the inert handles returned when tracing is off, so calling code never
-branches on whether tracing is running. Entering a handle (`with span:`)
-makes it the active span for the block and ends it on exit, recording an
-`Exception` raised inside it. A `BaseException` that is not an
-`Exception` (`GeneratorExit`, `CancelledError`, `KeyboardInterrupt`)
-still ends the span but is not recorded as a failure.
+Every method is safe to call on any handle, including after `end()` and on the inert handles returned when tracing is off, so calling code never branches on whether tracing is running. Entering a handle (`with span:`) makes it the active span for the block and ends it on exit, recording an `Exception` raised inside it. A `BaseException` that is not an `Exception` (`GeneratorExit`, `CancelledError`, `KeyboardInterrupt`) still ends the span but is not recorded as a failure.
 
 **Functions:**
 
@@ -3961,9 +3676,7 @@ add_event(name: str, attributes: Optional[Mapping[str, Any]] = None, timestamp: 
 
 Add a timestamped event to the span. Ignored after `end()`.
 
-`timestamp` defaults to now; it accepts a `datetime`, or seconds
-since the epoch as a `float` or `int`. Returns the span, so calls
-chain.
+`timestamp` defaults to now; it accepts a `datetime`, or seconds since the epoch as a `float` or `int`. Returns the span, so calls chain.
 
 **Examples:**
 
@@ -3979,10 +3692,7 @@ end(end_time: Union[datetime, float, None] = None) -> None
 
 End the span and queue it for export. Idempotent.
 
-`end_time` defaults to now; it accepts a `datetime`, or seconds
-since the epoch as a `float` or `int`, and is never earlier than
-the start. Later calls, and later mutations, no-op. `with span:`
-ends the span on exit, so call this only for spans started manually.
+`end_time` defaults to now; it accepts a `datetime`, or seconds since the epoch as a `float` or `int`, and is never earlier than the start. Later calls, and later mutations, no-op. `with span:` ends the span on exit, so call this only for spans started manually.
 
 **Examples:**
 
@@ -4002,19 +3712,9 @@ record_exception(exception: BaseException) -> Span
 
 Record an exception as an `exception` event and mark the span `error`.
 
-Ignored after `end()`. The event carries `exception.type`,
-`exception.message` and, for a raised exception,
-`exception.stacktrace` (its last `max_attribute_value_length`
-characters, so a chained traceback keeps the outermost exception and
-may lose its cause). Returns the span, so calls chain. Inside
-`with span:` a raised `Exception` is recorded automatically, so
-this is for exceptions that are caught and handled.
+Ignored after `end()`. The event carries `exception.type`, `exception.message` and, for a raised exception, `exception.stacktrace` (its last `max_attribute_value_length` characters, so a chained traceback keeps the outermost exception and may lose its cause). Returns the span, so calls chain. Inside `with span:` a raised `Exception` is recorded automatically, so this is for exceptions that are caught and handled.
 
-The stack trace contains file paths from your server. Remove
-`exception.stacktrace` in `before_span_send` to keep them in your
-process. The `exception` event uses one of the span's event slots. A
-span whose event slots are full keeps its `error` status and the
-exception message, but loses the exception type and stack trace.
+The stack trace contains file paths from your server. Remove `exception.stacktrace` in `before_span_send` to keep them in your process. The `exception` event uses one of the span's event slots. A span whose event slots are full keeps its `error` status and the exception message, but loses the exception type and stack trace.
 
 **Examples:**
 
@@ -4033,10 +3733,7 @@ set_attribute(key: str, value: Any) -> Span
 
 Set one attribute on the span; last write wins. Ignored after `end()`.
 
-Returns the span, so calls chain. Prefer primitive values: strings,
-booleans, integers and floats keep their type. Lists and mappings are
-sent as OTLP arrays and maps, but PostHog stores them as serialized
-strings. `None` removes the key; anything else is stringified.
+Returns the span, so calls chain. Prefer primitive values: strings, booleans, integers and floats keep their type. Lists and mappings are sent as OTLP arrays and maps, but PostHog stores them as serialized strings. `None` removes the key; anything else is stringified.
 
 **Examples:**
 
@@ -4068,9 +3765,7 @@ set_status(code: str, message: Optional[str] = None) -> Span
 
 Set the span status to `"ok"` or `"error"`. Ignored after `end()`.
 
-Unset by default. Any other `code` is ignored. `ok` is final for the
-scoped form: an `Exception` raised inside `with span:` does not override
-it. Returns the span, so calls chain.
+Unset by default. Any other `code` is ignored. `ok` is final for the scoped form: an `Exception` raised inside `with span:` does not override it. Returns the span, so calls chain.
 
 **Examples:**
 
@@ -4121,16 +3816,9 @@ Bases: `_EmailsBase`
 
 Sends transactional email from PostHog email templates or from content in your code.
 
-`host` is your PostHog app host. PostHog Cloud ingestion hosts map to the
-app host, so `us.i.posthog.com` sends to `us.posthog.com`. Any other
-host is used as given.
+`host` is your PostHog app host. PostHog Cloud ingestion hosts map to the app host, so `us.i.posthog.com` sends to `us.posthog.com`. Any other host is used as given.
 
-Each send retries network errors, rate limits and an unavailable service up
-to `max_retries` times, with the same idempotency key. Set
-`max_retries=0` when a job runner already retries the send. `timeout`
-is in seconds, per request. Pass `session` to send through your own
-`requests.Session`, for example a test double. `migrated_from`, such
-as `"resend"`, tells PostHog which provider your sends came from.
+Each send retries network errors, rate limits and an unavailable service up to `max_retries` times, with the same idempotency key. Set `max_retries=0` when a job runner already retries the send. `timeout` is in seconds, per request. Pass `session` to send through your own `requests.Session`, for example a test double. `migrated_from`, such as `"resend"`, tells PostHog which provider your sends came from.
 
 **Functions:**
 
@@ -4175,9 +3863,9 @@ Read what happened to an email that `send` queued.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`message_id` | `Union[str, UUID]` | The `id` of the `SendEmailResult` that `send` returned. | *required*
+Name | Description
+---- | -----------
+`message_id` | `Union[str, UUID]`. The `id` of the `SendEmailResult` that `send` returned. Required.
 
 **Returns:**
 
@@ -4233,21 +3921,18 @@ send(**kwargs: Any) -> SendEmailResult
 
 Queue one email, from a template in PostHog or from content in your code.
 
-Pass exactly one form. The template form names a template made in
-PostHog with `template_id`. The code form names the email with
-`template_key` and passes `subject` and `html`, `text` or both:
-see `CodeEmailArgs`.
+Pass exactly one form. The template form names a template made in PostHog with `template_id`. The code form names the email with `template_key` and passes `subject` and `html`, `text` or both: see `CodeEmailArgs`.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`to` |  | One recipient email address. | 
-`template_id` |  | The UUID of a template made transactional in PostHog. | 
-`template_data` |  | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | 
-`distinct_id` |  | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | 
-`idempotency_key` |  | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | 
-`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
+Name | Description
+---- | -----------
+`to` | One recipient email address.
+`template_id` | The UUID of a template made transactional in PostHog.
+`template_data` | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties.
+`distinct_id` | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address.
+`idempotency_key` | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too.
+`max_retries` | Overrides the client's maximum number of retries for this send. `0` turns retries off.
 
 **Returns:**
 
@@ -4297,9 +3982,7 @@ Bases: `Exception`
 
 PostHog did not queue the email, or the client could not tell whether it did.
 
-Branch on `code`, PostHog's stable error code, or on `name`, a coarse
-category of the failure. The message never contains the secret key or the
-request body.
+Branch on `code`, PostHog's stable error code, or on `name`, a coarse category of the failure. The message never contains the secret key or the request body.
 
 **Attributes:**
 
@@ -4411,14 +4094,14 @@ Optional arguments for the set method.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`distinct_id` |  | Unique identifier for the user to set properties on. If not set, the context distinct_id is used, if available, otherwise this function does nothing. Setting context-level distinct_id's is recommended. | 
-`properties` |  | Dictionary of properties to set on the person | 
-`timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
-`uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
-`disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
-`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. `process_person_profile` is `True` unless this call sets it. | 
+Name | Description
+---- | -----------
+`distinct_id` | Unique identifier for the user to set properties on. If not set, the context distinct_id is used, if available, otherwise this function does nothing. Setting context-level distinct_id's is recommended.
+`properties` | Dictionary of properties to set on the person
+`timestamp` | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC.
+`uuid` | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID.
+`disable_geoip` | Whether to disable GeoIP lookup for this operation. Defaults to False.
+`options` | Capture options for this event, sent as given. See `OptionalCaptureArgs`. `process_person_profile` is `True` unless this call sets it.
 
 **Attributes:**
 
@@ -4473,35 +4156,32 @@ Bases: `_RecipientArgs`
 
 A send of email content that your code rendered for one recipient, named by a key.
 
-The content goes out as is. To send a React email, render it to HTML in
-your app first.
+The content goes out as is. To send a React email, render it to HTML in your app first.
 
 An optional field passed as `None` counts as left out.
 
-A PostHog version that doesn't take a field yet, such as `cc`, refuses
-the send with an error that names the field in `EmailError.field`. It
-never drops the field and sends the rest.
+A PostHog version that doesn't take a field yet, such as `cc`, refuses the send with an error that names the field in `EmailError.field`. It never drops the field and sends the rest.
 
 **Parameters:**
 
-Name | Type | Description | Default
----- | ---- | ----------- | -------
-`to` |  | One recipient email address. | 
-`template_key` |  | Names the email, so its metrics, logs and status group under it. Letters, digits, `-` and `_`, at most 400. | 
-`subject` |  | The subject line. | 
-`html` |  | The HTML body. Give `html`, `text` or both. | 
-`text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
-`from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
-`reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
-`cc` |  | One address or a list of addresses that get a visible copy, at most 10. | 
-`bcc` |  | One address or a list of addresses that get a hidden copy, at most 10. | 
-`attachments` |  | Files sent with the email: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files. The client checks both before any request. It uploads each file that PostHog doesn't hold yet, then sends the email. A file the client can't send raises `EmailError` with `code` `invalid_attachment`. | 
-`capture_engagement` |  | Deprecated, use `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both `capture_engagement` and `tracking`. Captures the email's engagement events as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
-`sensitive` |  | Marks the email as sensitive, such as one that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. The template form doesn't take it. | 
-`tracking` |  | What PostHog tracks for this email. Without it, PostHog counts opens with its open pixel, captures engagement events, and counts clicks only when the email isn't sensitive. `True` turns on opens, clicks and engagement events. `False` turns off all tracking, including kinds PostHog adds later: PostHog can't count the email's opens or clicks, and captures no engagement events. An `EmailTracking` dict turns each kind on or off, and a key you leave out keeps its default. Turn clicks on for a sensitive email only when its links are safe to send through PostHog's click tracking. The template form doesn't take it. | 
-`distinct_id` |  | The recipient's distinct ID in your product. | 
-`idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
-`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
+Name | Description
+---- | -----------
+`to` | One recipient email address.
+`template_key` | Names the email, so its metrics, logs and status group under it. Letters, digits, `-` and `_`, at most 400.
+`subject` | The subject line.
+`html` | The HTML body. Give `html`, `text` or both.
+`text` | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part.
+`from_` | A verified sender, such as `"Acme <hello@example.com>"`.
+`reply_to` | One address or a list of addresses. An empty list sends no reply-to.
+`cc` | One address or a list of addresses that get a visible copy, at most 10.
+`bcc` | One address or a list of addresses that get a hidden copy, at most 10.
+`attachments` | Files sent with the email: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files. The client checks both before any request. It uploads each file that PostHog doesn't hold yet, then sends the email. A file the client can't send raises `EmailError` with `code` `invalid_attachment`.
+`capture_engagement` | Deprecated, use `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both `capture_engagement` and `tracking`. Captures the email's engagement events as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it.
+`sensitive` | Marks the email as sensitive, such as one that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. The template form doesn't take it.
+`tracking` | What PostHog tracks for this email. Without it, PostHog counts opens with its open pixel, captures engagement events, and counts clicks only when the email isn't sensitive. `True` turns on opens, clicks and engagement events. `False` turns off all tracking, including kinds PostHog adds later: PostHog can't count the email's opens or clicks, and captures no engagement events. An `EmailTracking` dict turns each kind on or off, and a key you leave out keeps its default. Turn clicks on for a sensitive email only when its links are safe to send through PostHog's click tracking. The template form doesn't take it.
+`distinct_id` | The recipient's distinct ID in your product.
+`idempotency_key` | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since.
+`max_retries` | Overrides the client's maximum number of retries for this send. `0` turns retries off.
 
 **Attributes:**
 

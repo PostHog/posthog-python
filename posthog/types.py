@@ -124,16 +124,12 @@ class UnresolvedFlagReason(str, Enum):
     ``str`` keeps the members directly comparable to their string values. When more
     than one cause applies, the first reason in the order below is reported:
 
-    - ``EXPERIENCE_CONTINUITY``: The flag has experience continuity enabled, which
-      local evaluation never resolves. Change the flag to fix it.
-    - ``UNSUPPORTED_DEFINITION``: The flag uses something the local evaluator does not
-      support, such as a static cohort, an unknown operator or filter type, a
-      malformed value, a dependency with no loaded definition or a circular
-      dependency. Change the flag or upgrade the SDK to fix it.
-    - ``UNRESOLVED_DEPENDENCY``: A flag this flag depends on has a loaded definition
-      but was unresolved.
-    - ``MISSING_CONTEXT``: The call did not pass a property, group property or device
-      id the flag needs, or passed it in an unusable form. Pass it to fix it.
+    | Reason | Cause |
+    | --- | --- |
+    | ``EXPERIENCE_CONTINUITY`` | The flag has experience continuity enabled, which local evaluation never resolves. Change the flag to fix it. |
+    | ``UNSUPPORTED_DEFINITION`` | The flag uses something the local evaluator doesn't support, such as a static cohort, an unknown operator or filter type, a malformed value, a dependency with no loaded definition, or a circular dependency. Change the flag or upgrade the SDK to fix it. |
+    | ``UNRESOLVED_DEPENDENCY`` | A flag this flag depends on has a loaded definition but was unresolved. |
+    | ``MISSING_CONTEXT`` | The call didn't pass a property, group property, or device ID the flag needs, or passed it in an unusable form. Pass it to fix it. |
     """
 
     EXPERIENCE_CONTINUITY = "experience_continuity"
