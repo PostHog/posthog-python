@@ -42,8 +42,7 @@ from posthog.test.test_experiment_exposure import (
     _split,
 )
 from posthog.test.test_feature_flags_v2 import (
-    CASES,
-    OMITTED,
+    REPLAYED,
     _as_expectation,
     _binary64,
     _same_json,
@@ -1231,11 +1230,7 @@ RULE_REASONS = {
 
 # The client reads dates in UTC, so a case set in another timezone is replayed only by
 # the evaluator's own tests.
-REPLAYABLE = [
-    case
-    for case in CASES
-    if case["expected"]["status"] != OMITTED and case["context"]["timezone"] == "UTC"
-]
+REPLAYABLE = [case for case in REPLAYED if case["context"]["timezone"] == "UTC"]
 
 
 def _replay_through_client(case: Dict[str, Any]) -> Tuple[Any, Any, List[Any]]:
@@ -1333,11 +1328,7 @@ def test_the_client_replay_covers_the_corpora():
         case for case in REPLAYABLE if case["expected"]["status"] == "success"
     ]
     reachable = [case for case in succeeding if _reachable(case)]
-    other_timezone = [
-        case
-        for case in CASES
-        if case["expected"]["status"] != OMITTED and case not in REPLAYABLE
-    ]
+    other_timezone = [case for case in REPLAYED if case not in REPLAYABLE]
     # Results through the client; results of a complete property map that the client
     # cannot reproduce; errors and parse errors; cases in another timezone.
     assert (
@@ -1345,4 +1336,4 @@ def test_the_client_replay_covers_the_corpora():
         len(succeeding) - len(reachable),
         len(REPLAYABLE) - len(succeeding),
         len(other_timezone),
-    ) == (203, 8, 35, 8)
+    ) == (210, 8, 36, 8)
