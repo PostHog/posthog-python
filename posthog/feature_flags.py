@@ -339,22 +339,32 @@ def _get_holdout_variant(flag, bucketing_value) -> Optional[str]:
     Mirrors the server's evaluation order: a held-out value never reaches the flag's
     release conditions, so callers check this before matching any condition.
     """
+    percentage = _holdout_exclusion_percentage(flag)
+    if percentage is None:
+        return None
+
+    # The server treats 100 as "everyone" without hashing, so a 100% holdout can't
+    # miss on a hash boundary.
+    if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
+        return None
+
+    return f"holdout-{flag['filters']['holdout']['id']}"
+
+
+def _holdout_exclusion_percentage(flag) -> Optional[float]:
+    """The flag's holdout exclusion percentage, or None without a holdout.
+
+    The server clamps out-of-range percentages rather than rejecting them.
+    """
     holdout = (flag.get("filters") or {}).get("holdout")
     if not holdout:
         return None
 
     exclusion_percentage = holdout.get("exclusion_percentage")
-    holdout_id = holdout.get("id")
-    if exclusion_percentage is None or holdout_id is None:
+    if exclusion_percentage is None or holdout.get("id") is None:
         return None
 
-    # The server clamps out-of-range percentages rather than rejecting them, and treats
-    # 100 as "everyone" without hashing, so a 100% holdout can't miss on a hash boundary.
-    percentage = min(max(float(exclusion_percentage), 0.0), 100.0)
-    if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
-        return None
-
-    return f"holdout-{holdout_id}"
+    return min(max(float(exclusion_percentage), 0.0), 100.0)
 
 
 def get_matching_variant(flag, bucketing_value):
@@ -741,14 +751,36 @@ def _compute_flag_locally(
             )
 
         if not _is_usable_group_key(groups.get(group_name)):
-            # Group flags are never enabled without a usable group key.
-            # Don't fall back to `/flags`, since the response will be the same.
-            message = f"[FEATURE FLAGS] Can't compute group feature flag: {flag['key']} without group names passed in"
+            # The server would hash an empty group key for the holdout, so a
+            # holdout that can exclude anyone needs the group key.
+            if (_holdout_exclusion_percentage(flag) or 0.0) > 0.0:
+                raise InconclusiveMatchError(
+                    f"Group flag {flag['key']} has a holdout and no group key was passed",
+                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
+                )
+            # Conditions aggregated by this group are skipped; the flag's person
+            # conditions still run.
+            message = f"[FEATURE FLAGS] Skipping group conditions of feature flag {flag['key']} without a group key"
             if warn_on_unknown_groups:
                 log.warning(message)
             else:
                 log.debug(message)
-            return False
+            # Like the server, the flag-level identifier is then an empty string.
+            return match_feature_flag_properties(
+                flag,
+                distinct_id,
+                {},
+                cohort_properties=cohort_properties,
+                flags_by_key=flags_by_key,
+                property_matching_version=property_matching_version,
+                evaluation_cache=evaluation_cache,
+                device_id=device_id,
+                bucketing_value="",
+                group_type_mapping=group_type_mapping,
+                groups=groups,
+                group_properties=group_properties,
+                _evaluation_context=_evaluation_context,
+            )
 
         if group_name not in group_properties:
             raise InconclusiveMatchError(
@@ -955,41 +987,43 @@ def _get_condition_context(
     group_type_mapping,
     groups,
     group_properties,
+    _evaluation_context,
 ):
-    # Per-condition aggregation overrides only when the condition explicitly
-    # sets its own aggregation_group_type_index (mixed targeting).
-    # When absent, use the properties/bucketing already resolved by the caller.
+    """The properties and bucketing value a condition is matched with, or None
+    when the condition is skipped.
+
+    A condition uses its own aggregation_group_type_index when it has the key, an
+    explicit null meaning the person, and the flag-level aggregation otherwise.
+    ``properties`` and ``bucketing_value`` are the flag-level aggregation's.
+    """
     condition_aggregation = condition.get(
         "aggregation_group_type_index", flag_aggregation
     )
 
-    # Mixed-override path: condition-level aggregation differs from flag-level.
-    # This assumes flag-level aggregation is None for mixed flags.
-    if condition_aggregation != flag_aggregation:
-        if condition_aggregation is not None:
-            group_name = group_type_mapping.get(str(condition_aggregation))
-            if not group_name or not _is_usable_group_key(groups.get(group_name)):
-                log.debug(
-                    "Skipping group condition for flag '%s': group type index %s not available",
-                    flag.get("key", ""),
-                    condition_aggregation,
-                )
-                return None
-            if group_name not in group_properties:
-                raise InconclusiveMatchError(
-                    "Group properties were not passed",
-                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
-                )
-            effective_properties = group_properties[group_name]
-            effective_bucketing = _group_key_to_string(groups[group_name])
-        else:
-            effective_properties = properties
-            effective_bucketing = bucketing_value
-    else:
-        effective_properties = properties
-        effective_bucketing = bucketing_value
+    if condition_aggregation is None:
+        if flag_aggregation is None:
+            return properties, bucketing_value
+        # A person condition of a group flag reads the person, not the group.
+        return _evaluation_context.person_properties, resolve_bucketing_value(
+            flag, _evaluation_context.distinct_id, _evaluation_context.device_id
+        )
 
-    return effective_properties, effective_bucketing
+    group_name = group_type_mapping.get(str(condition_aggregation))
+    if not group_name or not _is_usable_group_key(groups.get(group_name)):
+        log.debug(
+            "Skipping group condition for flag '%s': group type index %s not available",
+            flag.get("key", ""),
+            condition_aggregation,
+        )
+        return None
+    if condition_aggregation == flag_aggregation:
+        return properties, bucketing_value
+    if group_name not in group_properties:
+        raise InconclusiveMatchError(
+            "Group properties were not passed",
+            reason=UnresolvedFlagReason.MISSING_CONTEXT,
+        )
+    return group_properties[group_name], _group_key_to_string(groups[group_name])
 
 
 def _match_flag_condition(
@@ -1019,6 +1053,7 @@ def _match_flag_condition(
         group_type_mapping,
         groups,
         group_properties,
+        _evaluation_context,
     )
     if context is None:
         return ConditionMatch.NO_MATCH, None

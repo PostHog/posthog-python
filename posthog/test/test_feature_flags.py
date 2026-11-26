@@ -481,6 +481,218 @@ class TestUnusableGroupKeys(unittest.TestCase):
         patch_flags.assert_called_once()
 
 
+def _plan_is_pro_condition(**condition):
+    return {
+        "properties": [
+            {"key": "plan", "value": "pro", "operator": "exact", "type": "person"}
+        ],
+        "rollout_percentage": 100,
+        **condition,
+    }
+
+
+def _company_flag(key, conditions, **filters):
+    return {
+        "id": 1,
+        "key": key,
+        "active": True,
+        "filters": {"aggregation_group_type_index": 0, "groups": conditions, **filters},
+    }
+
+
+# Each condition uses its own aggregation, falling back to the flag-level one, and
+# only a condition aggregated by a group without a usable key is skipped (sdk-specs#250).
+class TestGroupConditionsWithoutGroupKey(unittest.TestCase):
+    MISSING_GROUP_KEYS = [("omitted", None), ("empty_string", {"company": ""})]
+
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, send=False)
+        self.client.group_type_mapping = {"0": "company"}
+        self.client.feature_flags = [
+            _company_flag(
+                "person-condition",
+                [_plan_is_pro_condition(aggregation_group_type_index=None)],
+            ),
+            _company_flag(
+                "group-then-person",
+                [
+                    {"properties": [], "rollout_percentage": 100},
+                    _plan_is_pro_condition(aggregation_group_type_index=None),
+                ],
+            ),
+            _company_flag(
+                "group-only", [{"properties": [], "rollout_percentage": 100}]
+            ),
+            {
+                "id": 2,
+                "key": "depends-on-person-condition",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "person-condition",
+                                    "operator": "flag_evaluates_to",
+                                    "value": True,
+                                    "type": "flag",
+                                    "dependency_chain": ["person-condition"],
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            },
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    def evaluate(self, key, groups, plan):
+        kwargs = {"groups": groups} if groups is not None else {}
+        value = self.client.get_feature_flag(
+            key,
+            "user-1",
+            person_properties={"plan": plan},
+            send_feature_flag_events=False,
+            **kwargs,
+        )
+        flags = self.client.evaluate_flags(
+            "user-1", person_properties={"plan": plan}, **kwargs
+        )
+        self.assertIs(flags.get_flag(key), value)
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        return value
+
+    @parameterized.expand(MISSING_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_person_condition_of_group_flag_still_runs(
+        self, _name, groups, patch_flags
+    ):
+        for key in ("person-condition", "group-then-person"):
+            with self.subTest(key=key):
+                self.assertIs(self.evaluate(key, groups, "pro"), True)
+                self.assertIs(self.evaluate(key, groups, "free"), False)
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(MISSING_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_dependency_on_person_condition_of_group_flag(
+        self, _name, groups, patch_flags
+    ):
+        key = "depends-on-person-condition"
+        self.assertIs(self.evaluate(key, groups, "pro"), True)
+        self.assertIs(self.evaluate(key, groups, "free"), False)
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(MISSING_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_group_only_flag_is_false(self, _name, groups, patch_flags):
+        self.assertIs(self.evaluate("group-only", groups, "pro"), False)
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    def test_person_condition_reads_person_properties_with_group_key(self, patch_flags):
+        for plan, expected in (("pro", True), ("free", False)):
+            with self.subTest(plan=plan):
+                self.assertIs(
+                    self.client.get_feature_flag(
+                        "person-condition",
+                        "user-1",
+                        groups={"company": "acme"},
+                        person_properties={"plan": plan},
+                        group_properties={"company": {"plan": "enterprise"}},
+                        send_feature_flag_events=False,
+                    ),
+                    expected,
+                )
+        patch_flags.assert_not_called()
+
+
+class TestGroupFlagHoldoutWithoutGroupKey(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, send=False)
+        self.client.group_type_mapping = {"0": "company"}
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    def set_holdout_flag(self, exclusion_percentage):
+        self.client.feature_flags = [
+            _company_flag(
+                "held-out",
+                [{"properties": [], "rollout_percentage": 100}],
+                holdout={"id": 727, "exclusion_percentage": exclusion_percentage},
+            )
+        ]
+
+    @parameterized.expand(TestGroupConditionsWithoutGroupKey.MISSING_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_holdout_without_group_key_is_missing_context(
+        self, _name, groups, patch_flags
+    ):
+        self.set_holdout_flag(50)
+        kwargs = {"groups": groups} if groups is not None else {}
+        patch_flags.return_value = {"featureFlags": {"held-out": "remote"}}
+
+        self.assertIsNone(
+            self.client.get_feature_flag(
+                "held-out",
+                "user-1",
+                only_evaluate_locally=True,
+                send_feature_flag_events=False,
+                **kwargs,
+            )
+        )
+        flags = self.client.evaluate_flags(
+            "user-1", only_evaluate_locally=True, **kwargs
+        )
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"held-out": UnresolvedFlagReason.MISSING_CONTEXT},
+        )
+        patch_flags.assert_not_called()
+
+        self.assertEqual(
+            self.client.get_feature_flag(
+                "held-out", "user-1", send_feature_flag_events=False, **kwargs
+            ),
+            "remote",
+        )
+        patch_flags.assert_called_once()
+
+    @mock.patch("posthog.client.flags")
+    def test_holdout_with_group_key_is_evaluated_locally(self, patch_flags):
+        self.set_holdout_flag(100)
+        self.assertEqual(
+            self.client.get_feature_flag(
+                "held-out",
+                "user-1",
+                groups={"company": "acme"},
+                group_properties={"company": {}},
+                send_feature_flag_events=False,
+            ),
+            "holdout-727",
+        )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(TestGroupConditionsWithoutGroupKey.MISSING_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_zero_percent_holdout_without_group_key_is_false(
+        self, _name, groups, patch_flags
+    ):
+        self.set_holdout_flag(0)
+        kwargs = {"groups": groups} if groups is not None else {}
+        self.assertIs(
+            self.client.get_feature_flag(
+                "held-out", "user-1", send_feature_flag_events=False, **kwargs
+            ),
+            False,
+        )
+        patch_flags.assert_not_called()
+
+
 class TestNumericOrderingLocalEvaluation(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)
