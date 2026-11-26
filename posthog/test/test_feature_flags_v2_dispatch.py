@@ -7,8 +7,9 @@ a remote record, with ``locally_evaluated`` true. A config version 2 flag that t
 evaluator cannot decide falls back the way an inconclusive version 1 flag does: to a
 remote request in the default mode, and to no value with ``only_evaluate_locally``.
 
-The corpora come from ``fixtures/feature_flag_rules_v2``. Every other flag, identity
-and property here is invented.
+The corpora, the local outcome mapping and the whole definitions feed come from
+``fixtures/feature_flag_rules_v2``. Every other flag, identity and property here is
+invented.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from freezegun import freeze_time
 
 from posthog import _feature_flags_v2 as v2
 from posthog.client import Client
+from posthog.feature_flags import InconclusiveMatchError
 from posthog.request import GetResponse
 from posthog.test.test_experiment_exposure import (
     EXPOSURE,
@@ -45,12 +47,15 @@ from posthog.test.test_feature_flags_v2 import (
     REPLAYED,
     _as_expectation,
     _binary64,
+    _local_outcome,
     _same_json,
 )
+from posthog.test.test_flags_v4_response import _load as _load_contract_file
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
+    FlagMetadata,
     UnresolvedFlagReason,
     normalize_flags_response,
 )
@@ -740,39 +745,123 @@ def test_a_rule_that_needs_a_missing_property_ends_the_evaluation(client):
     assert snapshot.unresolved_flags == {"plan-gate": MISSING_CONTEXT}
 
 
-def test_a_remote_fallback_fills_only_the_undecided_flags(client):
-    # One feed with version 1, supported and unsupported config version 2 flags,
-    # interleaved as a definitions response may order them.
-    feed = [
-        _v1_definition("legacy-shelf"),
-        BOOLEAN,
-        UNKNOWN_VERSION,
-        _v1_definition("legacy-layout", variant="grid"),
-        STRING,
-        UNKNOWN_RULE_FIELD,
-        NUMBER,
-        _definition("paused-shelf", _filters(_targeted(True)), active=False),
-    ]
-    _load(client, *feed)
-    remote_values = {
-        definition["key"]: _record("targeting_match", "remote", key=definition["key"])
-        for definition in feed
-    }
+# --- The contract's definitions feed -------------------------------------------------
 
-    with _serving(_response(*remote_values.values())) as remote:
-        snapshot = client.evaluate_flags(DISTINCT_ID)
+# One whole definitions feed: version 1 and config version 2 flags, active and
+# inactive, a cohort flag, a group flag, and three entries that the parser does not
+# support, each between supported ones. For each entry the contract states the
+# evaluator that reads it, what the reader does with it in each mode, and the result of
+# a config version 2 entry for the fixture's context.
+FEED = _load_contract_file("definitions_feed.json")
+FEED_ENTRIES = list(zip(FEED["feed"]["flags"], FEED["expectations"]))
+FEED_CONTEXT = FEED["context"]
 
-    assert remote.call_count == 1
-    assert {key: snapshot.get_flag(key) for key in snapshot.keys} == {
-        "legacy-shelf": True,
-        "reading-mode": True,
-        "future-format": "remote",
-        "legacy-layout": "grid",
-        "shelf-label": "compact",
-        "closed-parser": "remote",
-        "page-size": True,
-        "paused-shelf": False,
+
+def _load_feed(client: Client) -> None:
+    # The client never knows that a property map is complete, reads dates in UTC and
+    # takes exact matching from the feed, so the fixture's context must be one it uses.
+    assert FEED_CONTEXT["properties_complete"] is False
+    assert FEED_CONTEXT["timezone"] == "UTC"
+    assert FEED_CONTEXT["explicit_exact_matching"] is (
+        FEED["feed"]["property_matching_version"] == 2
+    )
+    client._update_flag_state(copy.deepcopy(FEED["feed"]))
+
+
+def _record_as_expectation(record: FeatureFlag) -> Dict[str, Any]:
+    """A local record in the shape of a corpus ``expected`` member."""
+    metadata = record.metadata
+    assert record.reason is not None and isinstance(metadata, FlagMetadata)
+    expectation: Dict[str, Any] = {
+        "status": "success",
+        "value": record._value,
+        "reason": record.reason.code,
     }
+    if metadata._rule_id is not None:
+        expectation["rule"] = {
+            "id": metadata._rule_id,
+            "rule_type": metadata._rule_type,
+            "index": record.reason.condition_index,
+        }
+    if metadata._variant_key is not None:
+        expectation["variant"] = metadata._variant_key
+    return expectation
+
+
+@pytest.mark.parametrize(
+    "entry, expectation", FEED_ENTRIES, ids=[entry["key"] for entry, _ in FEED_ENTRIES]
+)
+def test_each_feed_entry_gets_the_evaluator_and_result_the_contract_states(
+    client, entry, expectation
+):
+    _load_feed(client)
+    definition = (client.feature_flags_by_key or {})[entry["key"]]
+
+    def read() -> Any:
+        return client._compute_flag_locally(
+            definition,
+            FEED_CONTEXT["identifier"],
+            person_properties=FEED_CONTEXT["properties"],
+        )
+
+    if expectation["reader"]["local_only"] == "unsupported":
+        with pytest.raises(InconclusiveMatchError) as raised:
+            read()
+        assert raised.value.reason is UNSUPPORTED
+    elif expectation["evaluator"] == "v1":
+        with mock.patch.object(v2, "_evaluate", side_effect=AssertionError("v2")):
+            assert not isinstance(read(), FeatureFlag)
+    else:
+        record = read()
+        assert isinstance(record, FeatureFlag)
+        assert _same_json(_record_as_expectation(record), expectation["expected"])
+
+
+@pytest.mark.parametrize("mode", ["auto", "local_only"])
+def test_only_the_feed_entries_the_reader_does_not_support_fall_back(client, mode):
+    _load_feed(client)
+    remote = _response(
+        *(
+            _record("targeting_match", "from-remote", key=entry["key"])
+            for entry, _ in FEED_ENTRIES
+        )
+    )
+    recording, events = _record_events(client)
+
+    with _serving(remote) as served, recording:
+        snapshot = client.evaluate_flags(
+            FEED_CONTEXT["identifier"],
+            person_properties=FEED_CONTEXT["properties"],
+            only_evaluate_locally=mode == "local_only",
+        )
+        values = {
+            entry["key"]: snapshot.get_flag(entry["key"]) for entry, _ in FEED_ENTRIES
+        }
+
+    outcomes = {
+        expectation["key"]: expectation["reader"][mode]
+        for expectation in FEED["expectations"]
+    }
+    assert served.call_count == (1 if mode == "auto" else 0)
+    assert snapshot.unresolved_flags == {
+        key: UNSUPPORTED
+        for key, outcome in outcomes.items()
+        if outcome == "unsupported"
+    }
+    for entry, expectation in FEED_ENTRIES:
+        key, outcome = entry["key"], outcomes[entry["key"]]
+        if outcome == "unsupported":
+            assert values[key] is None
+            continue
+        [called] = _named(events, FLAG_CALLED, key)
+        assert called.properties["locally_evaluated"] is (outcome == "local_evaluation")
+        if outcome == "remote_fallback":
+            assert values[key] == "from-remote"
+        elif "expected" in expectation:
+            # A sibling of an entry that falls back keeps its own result.
+            value, payload = _legacy_rendering(expectation["expected"]["value"])
+            assert values[key] == value
+            assert _same_json(snapshot.get_flag_payload(key), payload)
 
 
 # --- Flag dependencies -------------------------------------------------------------
@@ -1213,13 +1302,6 @@ def _legacy_rendering(value: Any) -> Tuple[Any, Any]:
     return True, value
 
 
-UNRESOLVED_REASONS = {
-    ("error", "missing_context"): MISSING_CONTEXT,
-    ("error", "invalid_property"): MISSING_CONTEXT,
-    ("error", "invalid_regex"): UNSUPPORTED,
-    ("parse_error", "malformed"): UNSUPPORTED,
-    ("parse_error", "unsupported"): UNSUPPORTED,
-}
 RULE_REASONS = {
     "targeting_match",
     "experiment_split",
@@ -1315,9 +1397,9 @@ def test_a_corpus_case_gives_its_result_through_the_client(case):
         assert case["context"]["properties_complete"] is True
         reason = MISSING_CONTEXT
     else:
-        reason = UNRESOLVED_REASONS[
-            expected["status"], expected.get("error") or expected.get("kind")
-        ]
+        local = _local_outcome(expected)
+        assert local["local_evaluation"] == "inconclusive"
+        reason = UnresolvedFlagReason(local["unresolved_reason"])
     assert result is None
     if snapshot is not None:
         assert snapshot.unresolved_flags == {key: reason}
