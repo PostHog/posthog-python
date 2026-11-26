@@ -920,6 +920,26 @@ attribute posthog.debug = False
 attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
+attribute posthog.emails.BatchEmailResult.error: Optional[EmailError] = None
+attribute posthog.emails.BatchEmailResult.idempotency_key: str
+attribute posthog.emails.BatchEmailResult.index: int
+attribute posthog.emails.BatchEmailResult.message_id: Optional[str] = None
+attribute posthog.emails.BatchEmailResult.replayed: bool = False
+attribute posthog.emails.BatchEmailResult.status: BatchStatus
+attribute posthog.emails.BatchEmailResult.to: str
+attribute posthog.emails.BatchRecipient.distinct_id: NotRequired[Optional[str]]
+attribute posthog.emails.BatchRecipient.idempotency_key: NotRequired[Optional[str]]
+attribute posthog.emails.BatchRecipient.template_data: NotRequired[Optional[Mapping[str, Any]]]
+attribute posthog.emails.BatchRecipient.to: str
+attribute posthog.emails.CodeBatchArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeBatchArgs.from_: NotRequired[Optional[str]]
+attribute posthog.emails.CodeBatchArgs.html: NotRequired[Optional[str]]
+attribute posthog.emails.CodeBatchArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+attribute posthog.emails.CodeBatchArgs.sensitive: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeBatchArgs.subject: str
+attribute posthog.emails.CodeBatchArgs.template_key: str
+attribute posthog.emails.CodeBatchArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.CodeBatchArgs.tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 attribute posthog.emails.CodeEmailArgs.attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
 attribute posthog.emails.CodeEmailArgs.bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
@@ -936,6 +956,7 @@ attribute posthog.emails.EmailAttachment.content: Union[bytes, bytearray, memory
 attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
 attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
 attribute posthog.emails.EmailAttachment.filename: str
+attribute posthog.emails.EmailBatchError.results = results
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -957,11 +978,15 @@ attribute posthog.emails.EmailTracking.opens: bool
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
+attribute posthog.emails.SendBatchResult.results: tuple[BatchEmailResult, ...]
+attribute posthog.emails.SendBatchResult.warnings: tuple[EmailWarning, ...] = ()
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.scheduled_at: Optional[datetime] = None
 attribute posthog.emails.SendEmailResult.status: Literal['queued', 'scheduled']
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
+attribute posthog.emails.TemplateBatchArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
+attribute posthog.emails.TemplateBatchArgs.template_id: Union[str, UUID]
 attribute posthog.emails.TemplateEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.TemplateEmailArgs.template_id: Union[str, UUID]
 attribute posthog.enable_exception_autocapture = False
@@ -1401,14 +1426,20 @@ class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout: float = 15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
+class posthog.emails.BatchEmailResult(index: int, to: str, idempotency_key: str, status: BatchStatus, message_id: Optional[str] = None, replayed: bool = False, error: Optional[EmailError] = None)
+class posthog.emails.BatchRecipient 
+class posthog.emails.CodeBatchArgs 
 class posthog.emails.CodeEmailArgs 
 class posthog.emails.EmailAttachment 
+class posthog.emails.EmailBatchError(error: EmailError, results: tuple[BatchEmailResult, ...])
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None, message_id: Optional[str] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
 class posthog.emails.EmailTracking 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
+class posthog.emails.SendBatchResult(results: tuple[BatchEmailResult, ...], warnings: tuple[EmailWarning, ...] = ())
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = (), scheduled_at: Optional[datetime] = None)
+class posthog.emails.TemplateBatchArgs 
 class posthog.emails.TemplateEmailArgs 
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
@@ -1940,8 +1971,10 @@ method posthog.contexts.ContextScope.set_device_id(device_id: str)
 method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)
 method posthog.emails.AsyncEmails.aclose() -> None
+method posthog.emails.AsyncEmails.batch(**kwargs: Any) -> SendBatchResult
 method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
 method posthog.emails.AsyncEmails.send(**kwargs: Any) -> SendEmailResult
+method posthog.emails.Emails.batch(**kwargs: Any) -> SendBatchResult
 method posthog.emails.Emails.close() -> None
 method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
 method posthog.emails.Emails.send(**kwargs: Any) -> SendEmailResult

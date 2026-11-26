@@ -3429,3 +3429,17 @@ async def test_async_refuses_a_naive_time_before_any_request():
         )
 
     assert seen == []
+
+
+def test_a_template_send_keeps_its_request_bytes():
+    emails, adapter = emails_with([accepted()])
+
+    send(emails, template_data={"name": "Ada"}, distinct_id="user_1")
+
+    assert (
+        adapter.requests[0].body
+        == (
+            f'{{"template_id": "{TEMPLATE_ID}", "to": "user@example.com", '
+            '"message_data": {"name": "Ada"}, "distinct_id": "user_1"}'
+        ).encode()
+    )

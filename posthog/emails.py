@@ -143,6 +143,50 @@ result = posthog.emails.send(
 print(result.status, result.scheduled_at)  # scheduled, the time in UTC
 ```
 
+Batches: ``emails.batch`` sends the same template or content to up to 100
+recipients in one request, one email each, with ``template_data`` per recipient
+for a template. It waits 45 seconds for the answer. Each recipient has its own
+``idempotency_key``, given or made by the client, that every retry reuses.
+Check each result's ``status``:
+
+- ``queued``: PostHog accepted the email.
+- ``failed``: PostHog refused it, and ``error`` says why, such as a suppressed
+  address.
+- ``unconfirmed``: the client can't tell whether PostHog accepted it, such as
+  after a lost answer or a 409 other than ``batch_unavailable``. Send it again
+  with the same key within 24 hours of the first request that used it, so it
+  goes out once. After a lost answer, a later refusal of the whole request
+  leaves every recipient ``unconfirmed`` too, and its error says some emails
+  may still go out.
+
+More than 100 recipients raises ``ValueError`` before anything is sent. A request
+that fails as a whole, such as a rate limit past its retries, raises
+:class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
+``content_too_large`` on a 413 means the request was larger than PostHog takes
+at once: split the recipients into smaller batches, as its ``fix`` says, and
+when the shared content or ``template_data`` alone passes the limit, which
+splitting doesn't help, send less of it. On a 400 it means the shared content or
+``template_data`` is too large to copy to every recipient, and its ``message``
+says what to send less of. ``batch_unavailable`` (409) means the project
+can't send batches yet: send each email the batch didn't queue with ``send``
+and its recipient's ``idempotency_key``. A 404 ``not_found`` that names no
+``field`` means PostHog found no template with that ``template_id``, or batch
+sends aren't available for the project: check the template ID, and if it's
+right, send each recipient on its own with ``send``, the same content and its
+recipient's ``idempotency_key``, until batch sends are available. A batch takes no ``cc``, ``bcc``,
+``attachments`` or ``scheduled_at``.
+
+```python
+result = posthog.emails.batch(
+    template_id="<template UUID>",
+    recipients=[
+        {"to": "ada@example.com", "template_data": {"name": "Ada"}},
+        {"to": "alan@example.com", "template_data": {"name": "Alan"}},
+    ],
+)
+retry = [r for r in result.results if r.status == "unconfirmed"]
+```
+
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
 
@@ -199,14 +243,20 @@ from .version import VERSION
 
 __all__ = [
     "AsyncEmails",
+    "BatchEmailResult",
+    "BatchRecipient",
+    "CodeBatchArgs",
     "CodeEmailArgs",
     "EmailAttachment",
+    "EmailBatchError",
     "EmailError",
     "EmailStatus",
     "EmailTracking",
     "EmailWarning",
     "Emails",
+    "SendBatchResult",
     "SendEmailResult",
+    "TemplateBatchArgs",
     "TemplateEmailArgs",
 ]
 
@@ -215,11 +265,16 @@ log = logging.getLogger("posthog")
 _SEND_PATH = "/api/messaging/send/email/"
 _UPLOADS_PATH = "/api/messaging/attachments/uploads/"
 _STATUS_PATH = "/api/messaging/emails/{message_id}/"
+_BATCH_PATH = "/api/messaging/send/email_batch/"
+_BATCH_MAX_RECIPIENTS = 100
+_POSTHOG_PIPELINE_WAIT = 30.0
+_BATCH_ATTEMPT_TIMEOUT = _POSTHOG_PIPELINE_WAIT + 15.0
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
+_UNCONFIRMED_SLOT_CODES = _IN_FLIGHT_CODES | {"delivery_unavailable", "api_error"}
 _QUOTA_CODES = frozenset({"quota_limited"})
 _DAILY_QUOTA_CODES = frozenset({"upload_quota_exceeded"})
 _MAX_ATTACHMENTS = 10
@@ -519,6 +574,166 @@ class EmailStatus:
     reason: Optional[str] = None
 
 
+class BatchRecipient(TypedDict):
+    """One recipient of :meth:`Emails.batch`. Each gets its own email.
+
+    Args:
+        to: The recipient's email address.
+        distinct_id: The recipient's distinct ID in your product.
+        idempotency_key: 1 to 255 visible ASCII characters, a different one
+            for each recipient of the call. Without it, the client makes one
+            that covers its own retries but not a second call, so pass keys
+            you store when a batch may be cut off and run again: a rerun
+            within 24 hours replays the emails that went out instead of
+            sending them twice. A single send and a batch recipient with the
+            same key and the same email replay each other. Never
+            reuse a key for another email: PostHog refuses a key it saw
+            with a different recipient, template or data with
+            ``idempotency_key_reused``, but two such sends at the same moment
+            can both read ``queued`` while only one email goes out.
+        template_data: Only with ``template_id``: values for this recipient,
+            merged over the batch's ``template_data``. A top-level key set here
+            replaces the same key there.
+    """
+
+    to: str
+    distinct_id: NotRequired[Optional[str]]
+    idempotency_key: NotRequired[Optional[str]]
+    template_data: NotRequired[Optional[Mapping[str, Any]]]
+
+
+class _BatchArgs(TypedDict):
+    recipients: Sequence[BatchRecipient]
+    max_retries: NotRequired[Optional[int]]
+
+
+class TemplateBatchArgs(_BatchArgs):
+    """A batch of an email template made in PostHog, named by its ID.
+
+    Args:
+        recipients: 1 to 100 recipients, sent in one request.
+        template_id: The UUID of a template made transactional in PostHog.
+        template_data: Values for the template's ``{{ variables.* }}``
+            placeholders, shared by every recipient.
+        max_retries: Overrides the client's maximum number of retries for
+            the batch request. ``0`` turns retries off.
+    """
+
+    template_id: Union[str, UUID]
+    template_data: NotRequired[Optional[Mapping[str, Any]]]
+
+
+class CodeBatchArgs(_BatchArgs):
+    """A batch of email content your code rendered, the same for every recipient.
+
+    Takes the fields of :class:`CodeEmailArgs` but ``to``, ``distinct_id``,
+    ``idempotency_key``, ``cc``, ``bcc``, ``attachments`` and
+    ``scheduled_at``. A recipient can't carry ``template_data``: send
+    personalized content with a ``template_id`` batch, or with
+    :meth:`Emails.send`.
+    """
+
+    template_key: str
+    subject: str
+    html: NotRequired[Optional[str]]
+    text: NotRequired[Optional[str]]
+    from_: NotRequired[Optional[str]]
+    reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+    capture_engagement: NotRequired[Optional[bool]]
+    sensitive: NotRequired[Optional[bool]]
+    tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
+
+
+_BATCH_RECIPIENT_FIELDS = frozenset(BatchRecipient.__annotations__)
+
+
+BatchStatus = Literal["queued", "failed", "unconfirmed"]
+
+
+@dataclass(frozen=True)
+class BatchEmailResult:
+    """What happened to one recipient of :meth:`Emails.batch`.
+
+    ``status`` is one of:
+
+    - ``queued``: PostHog accepted the email. Read its status with
+      :meth:`Emails.get` to see whether it went out.
+    - ``failed``: PostHog didn't queue the email, and ``error`` says why.
+    - ``unconfirmed``: the client can't tell whether PostHog queued the
+      email, such as after a lost answer, or a refusal that came after an
+      attempt got no answer. It may still go out. Send it again with the same
+      ``idempotency_key`` within 24 hours of the first request that used it,
+      so it goes out once.
+
+    Attributes:
+        index: The recipient's position in ``recipients``.
+        to: The recipient's email address.
+        idempotency_key: The recipient's key, given or made by the client.
+        status: One of the values above.
+        message_id: The email's message ID, when PostHog named it.
+        replayed: ``True`` when an earlier send with the same key had already
+            queued the email, so no new email was sent.
+        error: Why the email is not ``queued``. For an ``unconfirmed``
+            email, ``message`` says PostHog didn't confirm it and it may
+            still go out, ``code`` and ``status_code`` are the last answer's,
+            and ``fix`` says to send it again with the same key.
+    """
+
+    index: int
+    to: str
+    idempotency_key: str
+    status: BatchStatus
+    message_id: Optional[str] = None
+    replayed: bool = False
+    error: Optional[EmailError] = None
+
+
+@dataclass(frozen=True)
+class SendBatchResult:
+    """The answer to :meth:`Emails.batch`.
+
+    Attributes:
+        results: One result per recipient, in the order of ``recipients``.
+        warnings: Warnings PostHog returned about the batch, each once.
+    """
+
+    results: tuple[BatchEmailResult, ...]
+    warnings: tuple[EmailWarning, ...] = ()
+
+
+class EmailBatchError(EmailError):
+    """The request of :meth:`Emails.batch` failed as a whole.
+
+    The fields describe that request's error. ``results`` holds every
+    recipient, as ``failed``, or as ``unconfirmed`` when an attempt got no
+    answer and may have queued them, or PostHog answered 409 with a code other
+    than ``batch_unavailable``. Then ``message`` says some emails may still
+    go out, whatever PostHog answered last, and ``fix`` says to send each
+    recipient again with the same key and read each recipient's result.
+
+    Attributes:
+        results: One result per recipient, in the order of ``recipients``.
+    """
+
+    def __init__(
+        self,
+        error: EmailError,
+        results: tuple[BatchEmailResult, ...],
+    ) -> None:
+        super().__init__(
+            name=error.name,
+            code=error.code,
+            message=error.message,
+            status_code=error.status_code,
+            why=error.why,
+            fix=error.fix,
+            docs_url=error.docs_url,
+            field=error.field,
+            retry_after=error.retry_after,
+        )
+        self.results = results
+
+
 @dataclass(frozen=True)
 class _File:
     sha256: str
@@ -615,13 +830,13 @@ def _prepare_code_send(
     )
 
 
-def _code_content(args: Mapping[str, Any]) -> dict[str, str]:
+def _code_content(args: Mapping[str, Any], method: str = "send") -> dict[str, str]:
     content = {"subject": _nonempty_text(args, "subject")}
     content.update(
         {field: _string(args, field) for field in ("html", "text") if field in args}
     )
     if "html" not in content and "text" not in content:
-        raise TypeError("send() needs html, text or both.")
+        raise TypeError(f"{method}() needs html, text or both.")
     if not (content.get("html") or content.get("text")):
         raise ValueError("html or text must be a nonempty string.")
 
@@ -881,19 +1096,11 @@ def _prepare_send(
 ) -> _PreparedSend:
     to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     max_retries = _retry_limit(max_retries)
-    try:
-        template_uuid = (
-            template_id if isinstance(template_id, UUID) else UUID(template_id)
-        )
-    except (TypeError, ValueError, AttributeError):
-        raise ValueError("template_id must be the template's UUID.") from None
-    if template_data is not None and not isinstance(template_data, Mapping):
-        raise TypeError("template_data must be a mapping.")
-
+    template, message_data = _template(template_id, template_data)
     payload: dict[str, Any] = {
-        "template_id": str(template_uuid),
+        "template_id": template,
         "to": to,
-        "message_data": clean(dict(template_data or {})),
+        "message_data": message_data,
     }
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
@@ -905,6 +1112,18 @@ def _prepare_send(
         max_retries=max_retries,
         scheduled_at=scheduled_at,
     )
+
+
+def _template(template_id: Any, template_data: Any) -> tuple[str, dict[str, Any]]:
+    try:
+        template_uuid = (
+            template_id if isinstance(template_id, UUID) else UUID(template_id)
+        )
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError("template_id must be the template's UUID.") from None
+    if template_data is not None and not isinstance(template_data, Mapping):
+        raise TypeError("template_data must be a mapping.")
+    return str(template_uuid), clean(dict(template_data or {}))
 
 
 def _recipient(
@@ -1073,7 +1292,7 @@ def _idempotency_error_name(status: int, code: str) -> str:
     if status == 409:
         return (
             "validation_error"
-            if code == "template_outdated"
+            if code in ("template_outdated", "batch_unavailable")
             else "concurrent_idempotent_requests"
         )
     # The template send route also answers 422 for send checks such as recipient_suppressed.
@@ -1401,6 +1620,10 @@ def _response_error(
     )
 
 
+def _held_by_another_request(error: EmailError) -> bool:
+    return error.status_code == 409 and error.code in _IN_FLIGHT_CODES
+
+
 def _is_retryable(error: EmailError) -> bool:
     # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
     if error.status_code is None:
@@ -1408,7 +1631,7 @@ def _is_retryable(error: EmailError) -> bool:
     if error.code == "attachment_upload_failed":
         return error.status_code in _STORAGE_RETRY_STATUSES
     if error.status_code == 409:
-        return error.code in _IN_FLIGHT_CODES
+        return _held_by_another_request(error)
     if error.status_code == 429:
         return error.code not in _QUOTA_CODES | _DAILY_QUOTA_CODES
     return error.status_code == 503
@@ -1428,7 +1651,7 @@ def _no_op() -> None:
     pass
 
 
-def _log_warnings(result: SendEmailResult) -> None:
+def _log_warnings(result: Union[SendEmailResult, SendBatchResult]) -> None:
     for warning in result.warnings:
         log.warning("PostHog email warning %s: %s", warning.code, warning.message)
 
@@ -1493,6 +1716,357 @@ def _files_body(files: Sequence[_File]) -> bytes:
     )
 
 
+@dataclass(frozen=True)
+class _BatchMember:
+    index: int
+    to: str
+    idempotency_key: str
+    wire: dict[str, Any]
+
+
+def _prepare_batch(args: Mapping[str, Any]) -> _BatchRun:
+    is_template_form = "template_id" in args
+    if is_template_form == ("template_key" in args):
+        raise TypeError("Pass either template_id or template_key.")
+    form = TemplateBatchArgs if is_template_form else CodeBatchArgs
+    unexpected = sorted(set(args) - set(form.__annotations__))
+    if unexpected:
+        raise TypeError(
+            f"batch() got arguments that the {'template' if is_template_form else 'code'} "
+            f"form doesn't take: {', '.join(unexpected)}. A batch takes no scheduled_at, "
+            "cc, bcc or attachments, and each recipient's to goes in recipients."
+        )
+    if "recipients" not in args:
+        raise TypeError("batch() is missing the argument recipients.")
+    max_retries = _retry_limit(args.get("max_retries"))
+    shared = (
+        _template_batch_email(args) if is_template_form else _code_batch_email(args)
+    )
+    members = _batch_members(args["recipients"], is_template_form)
+    return _BatchRun(shared, members, max_retries)
+
+
+def _template_batch_email(args: Mapping[str, Any]) -> dict[str, Any]:
+    template, message_data = _template(args["template_id"], args.get("template_data"))
+    return {"template_id": template, "message_data": message_data}
+
+
+def _code_batch_email(args: Mapping[str, Any]) -> dict[str, Any]:
+    args = {
+        name: value
+        for name, value in args.items()
+        if value is not None or name not in _OPTIONAL_CODE_FIELDS
+    }
+    if "subject" not in args:
+        raise TypeError("batch() is missing the argument subject.")
+    template_key = args["template_key"]
+    if not isinstance(template_key, str) or not _TEMPLATE_KEY.fullmatch(template_key):
+        raise ValueError(
+            "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
+        )
+    return {
+        "template_key": template_key,
+        **_code_content(args, "batch"),
+        **_sender(args),
+    }
+
+
+def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember]:
+    if isinstance(recipients, (str, bytes, Mapping)) or not isinstance(
+        recipients, Sequence
+    ):
+        raise TypeError("recipients must be a list of recipients, each a dict with to.")
+    if not recipients:
+        raise ValueError("recipients must hold at least one recipient.")
+    if len(recipients) > _BATCH_MAX_RECIPIENTS:
+        raise ValueError(
+            f"A batch takes at most {_BATCH_MAX_RECIPIENTS} recipients, and recipients "
+            f"holds {len(recipients)}, so no email was sent. Split them into batches "
+            f"of at most {_BATCH_MAX_RECIPIENTS}."
+        )
+    first_with_key: dict[str, int] = {}
+    members = []
+    for index, recipient in enumerate(recipients):
+        where = f"recipients[{index}]"
+        if not isinstance(recipient, Mapping) or "to" not in recipient:
+            raise TypeError(
+                f"{where} must be a dict with to, such as {{'to': 'user@example.com'}}."
+            )
+        unknown = sorted(set(recipient) - _BATCH_RECIPIENT_FIELDS)
+        if unknown:
+            raise TypeError(
+                f"{where} takes only to, distinct_id, idempotency_key and template_data, "
+                f"not {', '.join(unknown)}."
+            )
+        try:
+            to, distinct_id, key = _recipient(
+                recipient["to"],
+                recipient.get("distinct_id"),
+                recipient.get("idempotency_key"),
+            )
+        except (TypeError, ValueError) as exc:
+            raise type(exc)(f"{where}: {exc}") from None
+        wire: dict[str, Any] = {"to": to, "idempotency_key": key}
+        if distinct_id is not None:
+            wire["distinct_id"] = distinct_id
+        data = recipient.get("template_data")
+        if data is not None:
+            if not is_template_form:
+                raise TypeError(
+                    f"{where} has template_data, but a batch with template_key sends the same "
+                    "content to every recipient. Send personalized content with a template_id "
+                    "batch or with send()."
+                )
+            if not isinstance(data, Mapping):
+                raise TypeError(f"{where}: template_data must be a mapping.")
+            wire["message_data"] = clean(dict(data))
+        first = first_with_key.setdefault(key, index)
+        if first != index:
+            raise ValueError(
+                f"recipients[{index}] has the same idempotency_key as recipients[{first}]. "
+                "Give each recipient its own key."
+            )
+        members.append(_BatchMember(index, to, key, wire))
+    return members
+
+
+_BATCH_NOT_FOUND = {
+    True: (
+        "PostHog found no template with this template_id, or batch sends aren't "
+        "available for this project",
+        "Check template_id. If it's right, send each recipient on its own with "
+        "send() and its idempotency_key until batch sends are available.",
+    ),
+    False: (
+        "Batch sends or sending from code aren't available for this project",
+        "If the project can send email from code, send each recipient on its own "
+        "with send() and its idempotency_key until batch sends are available.",
+    ),
+}
+
+
+def _batch_not_found(template_form: bool) -> dict[str, str]:
+    cause, fix = _BATCH_NOT_FOUND[template_form]
+    return {
+        "code": "not_found",
+        "detail": cause + ", so PostHog sent no email of this request.",
+        "fix": fix,
+    }
+
+
+def _said(value: Any) -> Optional[str]:
+    text = _text(value)
+    return text if text and text.strip() else None
+
+
+def _readable_code(fields: Mapping[str, Any]) -> Optional[str]:
+    return _said(fields.get("code"))
+
+
+def _batch_response_error(
+    fields: Mapping[str, Any],
+    status: int,
+    retry_after_header: Optional[str],
+    recipient_count: int,
+    template_form: bool,
+) -> EmailError:
+    fields = {key: value for key, value in fields.items() if value is not None}
+    code = _readable_code(fields)
+    if (
+        status == 404
+        and code in (None, "not_found", "api_error")
+        and not _text(fields.get("attr"))
+    ):
+        fields = _batch_not_found(template_form)
+    if status == 413 and not code:
+        fields = {**fields, "code": "content_too_large"}
+    if status == 413 and not _said(fields.get("fix")):
+        fields = {
+            **fields,
+            "fix": "Split the recipients into smaller batches and send each with batch()."
+            if recipient_count > 1
+            else "Send less template_data or content for this recipient.",
+        }
+    if fields.get("code") == "batch_unavailable":
+        fields = {
+            **fields,
+            "fix": "Until batch sends are on for the project, send each email the "
+            "batch didn't queue with send() and its recipient's idempotency_key.",
+        }
+    return _response_error(fields, status, retry_after_header)
+
+
+def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
+    if not isinstance(error, dict):
+        return EmailError(
+            name="application_error",
+            code="api_error",
+            message="PostHog answered without a readable result for this email, so it may still go out.",
+            message_id=message_id,
+        )
+    code = _said(error.get("code")) or "api_error"
+    status = error.get("status")
+    status_code = (
+        status if isinstance(status, int) and not isinstance(status, bool) else None
+    )
+    return EmailError(
+        name=_error_name(status_code, code),
+        code=code,
+        message=_text(error.get("detail"))
+        or f"PostHog didn't queue this email: {code}.",
+        status_code=status_code,
+        message_id=message_id,
+    )
+
+
+_SEND_AGAIN = (
+    "Send it again with the same idempotency_key within 24 hours of the first request "
+    "that used it, so it goes out once."
+)
+
+
+_SEND_EACH_AGAIN = (
+    "Send each recipient again with the same idempotency_key within 24 hours of the "
+    "first request that used it, so each email goes out once, and read each "
+    "recipient's result."
+)
+
+
+def _unconfirmed(message_id: Optional[str], cause: EmailError) -> EmailError:
+    return EmailError(
+        name=cause.name,
+        code=cause.code,
+        message="PostHog didn't confirm this email, so it may still go out.",
+        status_code=cause.status_code,
+        fix=_SEND_AGAIN,
+        docs_url=cause.docs_url,
+        field=cause.field,
+        retry_after=cause.retry_after,
+        message_id=message_id,
+    )
+
+
+class _BatchRun:
+    """The one request of a batch call, and what PostHog answered for each recipient."""
+
+    def __init__(
+        self,
+        shared: Mapping[str, Any],
+        members: list[_BatchMember],
+        max_retries: Optional[int],
+    ) -> None:
+        self.members = members
+        self.max_retries = max_retries
+        self.body = _encode(
+            {**shared, "recipients": [member.wire for member in members]}
+        )
+        self.results: tuple[BatchEmailResult, ...] = ()
+        self.warnings: list[EmailWarning] = []
+        self.maybe_queued = False
+        self.template_form = "template_id" in shared
+
+    def _result(
+        self, member: _BatchMember, status: BatchStatus, **fields: Any
+    ) -> BatchEmailResult:
+        return BatchEmailResult(
+            index=member.index,
+            to=member.to,
+            idempotency_key=member.idempotency_key,
+            status=status,
+            **fields,
+        )
+
+    def lost(self) -> None:
+        """An attempt got no usable answer, so it may have queued every recipient."""
+        self.maybe_queued = True
+
+    def answer(
+        self,
+        status: int,
+        body: bytes,
+        retry_after_header: Optional[str],
+    ) -> None:
+        fields = _json_object(body)
+        if not 200 <= status < 300:
+            failure = _batch_response_error(
+                fields,
+                status,
+                retry_after_header,
+                len(self.members),
+                self.template_form,
+            )
+            unsettled_conflict = (
+                status == 409 and _readable_code(fields) != "batch_unavailable"
+            )
+            if status >= 500 or unsettled_conflict:
+                self.lost()
+            raise failure
+        slots = fields.get("results")
+        if not isinstance(slots, list) or len(slots) != len(self.members):
+            self.lost()
+            raise _sdk_error(
+                "api_error",
+                "PostHog answered the batch without a result for each recipient.",
+                status,
+            )
+        self.results = tuple(
+            self._settle(member, slot if isinstance(slot, dict) else {})
+            for member, slot in zip(self.members, slots)
+        )
+        for warning in _parse_warnings(fields.get("warnings")):
+            if warning not in self.warnings:
+                self.warnings.append(warning)
+
+    def _settle(
+        self, member: _BatchMember, slot: Mapping[str, Any]
+    ) -> BatchEmailResult:
+        message_id = _text(slot.get("message_id"))
+        error = slot.get("error")
+        if error is None and slot.get("status") == "queued" and message_id:
+            return self._result(
+                member,
+                "queued",
+                message_id=message_id,
+                replayed=slot.get("replayed") is True,
+            )
+        answer = _slot_error(error, message_id)
+        if self.maybe_queued or answer.code in _UNCONFIRMED_SLOT_CODES:
+            return self._result(
+                member,
+                "unconfirmed",
+                message_id=message_id,
+                error=_unconfirmed(message_id, answer),
+            )
+        return self._result(member, "failed", message_id=message_id, error=answer)
+
+    def result(self) -> SendBatchResult:
+        return SendBatchResult(results=self.results, warnings=tuple(self.warnings))
+
+    def failure(self, error: EmailError) -> EmailBatchError:
+        """The request failed as a whole, so every recipient shares its error."""
+        if self.maybe_queued:
+            results = tuple(
+                self._result(member, "unconfirmed", error=_unconfirmed(None, error))
+                for member in self.members
+            )
+            error = EmailError(
+                name=error.name,
+                code=error.code,
+                message="PostHog didn't confirm this batch, so some of its emails "
+                "may still go out.",
+                status_code=error.status_code,
+                fix=_SEND_EACH_AGAIN,
+                docs_url=error.docs_url,
+                field=error.field,
+                retry_after=error.retry_after,
+            )
+        else:
+            results = tuple(
+                self._result(member, "failed", error=error) for member in self.members
+            )
+        return EmailBatchError(error, results)
+
+
 class _EmailsBase:
     def __init__(
         self,
@@ -1530,12 +2104,38 @@ class _EmailsBase:
             )
         return finish
 
+    def _still_admitted(self) -> bool:
+        finish = self._admit()
+        if finish is None:
+            return False
+        finish()
+        return True
+
+    def _retry_while_admitted(self) -> Callable[[], None]:
+        """Before each retry of a batch request, stop when the client shut down."""
+        attempts = 0
+
+        def check() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1 and not self._still_admitted():
+                raise _sdk_error(
+                    "client_closed",
+                    "The PostHog client is shut down, so it didn't retry the "
+                    "batch request.",
+                )
+
+        return check
+
     def _secret_key(self, key_needed: str) -> str:
         if self._host_error:
             raise _sdk_error("missing_app_host", self._host_error)
         if not self.secret_key:
             raise _sdk_error("missing_secret_key", key_needed)
         return self.secret_key
+
+    def _batch_timeout(self) -> float:
+        return max(float(self.timeout), _BATCH_ATTEMPT_TIMEOUT)
 
     def _check_schedulable(self, prepared: _PreparedSend) -> None:
         if prepared.scheduled_at is None or self.host in (
@@ -1685,6 +2285,105 @@ class Emails(_EmailsBase):
         _log_warnings(result)
         return result
 
+    @overload
+    def batch(self, **kwargs: Unpack[TemplateBatchArgs]) -> SendBatchResult: ...
+
+    @overload
+    def batch(self, **kwargs: Unpack[CodeBatchArgs]) -> SendBatchResult: ...
+
+    def batch(self, **kwargs: Any) -> SendBatchResult:
+        """Queue the same email for up to 100 recipients, one email each.
+
+        Pass the template form, with ``template_id``, or the code form, with
+        ``template_key``: see :class:`TemplateBatchArgs` and
+        :class:`CodeBatchArgs`. The client sends every recipient in one
+        request.
+
+        Each recipient has an ``idempotency_key``, given or made by the
+        client, that every retry reuses, so a retry never queues an email
+        twice.
+
+        Args:
+            recipients: 1 to 100 recipients, each a :class:`BatchRecipient`.
+            template_id: The UUID of a template made transactional in PostHog.
+            template_data: Values for the template, shared by every recipient.
+            template_key: Names the email of the code form. With it, pass the
+                content as :meth:`send` takes it.
+            max_retries: Overrides the client's maximum number of retries for
+                the request. ``0`` turns retries off.
+
+        Returns:
+            A result per recipient, in the order of ``recipients``. Check each
+            ``status``: ``queued``, ``failed`` or ``unconfirmed``. Send an
+            ``unconfirmed`` email again with the same key to make sure it goes
+            out once.
+
+        Raises:
+            EmailBatchError: The request failed as a whole. ``results`` holds
+                every recipient. ``code`` is ``content_too_large`` on a 413 when
+                the request was larger than PostHog takes at once: split the
+                recipients into smaller batches, or send less shared content
+                or ``template_data`` when that alone passes the limit. On a 400
+                the shared content or ``template_data`` is too large to copy to
+                every recipient, and ``message`` says what to send less of. ``batch_unavailable`` means the project
+                can't send batches yet: send each email the batch didn't
+                queue with :meth:`send` and its recipient's
+                ``idempotency_key``. ``client_closed`` means the client shut
+                down before a retry.
+            EmailError: The client sent nothing, such as when it is disabled.
+            TypeError, ValueError: An argument has the wrong type or format,
+                such as more than 100 recipients or two recipients with the
+                same ``idempotency_key``.
+
+        Examples:
+            ```python
+            result = emails.batch(
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                recipients=[
+                    {"to": "ada@example.com", "template_data": {"name": "Ada"}},
+                    {"to": "alan@example.com", "template_data": {"name": "Alan"}},
+                ],
+            )
+            for email in result.results:
+                if email.status != "queued":
+                    print(email.to, email.status, email.error)
+            ```
+        """
+        run = _prepare_batch(kwargs)
+        finish = self._start(_SEND_NOT_DONE)
+        try:
+            secret_key = self._secret_key(_SEND_KEY_NEEDED)
+            headers = _headers(secret_key, self.migrated_from, has_body=True)
+            try:
+                self._call(
+                    self._batch_attempt(run, headers), run.answer, run.max_retries
+                )
+            except EmailError as error:
+                raise run.failure(error) from error
+        finally:
+            finish()
+        result = run.result()
+        _log_warnings(result)
+        return result
+
+    def _batch_attempt(
+        self, run: _BatchRun, headers: dict[str, str]
+    ) -> Callable[[], requests.Response]:
+        send = self._posthog_request(
+            "POST", _BATCH_PATH, run.body, headers, self._batch_timeout()
+        )
+        retry = self._retry_while_admitted()
+
+        def attempt() -> requests.Response:
+            retry()
+            try:
+                return send()
+            except requests.exceptions.RequestException:
+                run.lost()
+                raise
+
+        return attempt
+
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
         if prepared.files:
             self._upload(prepared, secret_key)
@@ -1754,7 +2453,12 @@ class Emails(_EmailsBase):
             finish()
 
     def _posthog_request(
-        self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
+        self,
+        method: str,
+        path: str,
+        body: Optional[bytes],
+        headers: dict[str, str],
+        timeout: Optional[float] = None,
     ) -> Callable[[], requests.Response]:
         session, auth = self._get_session(), _BearerAuth(headers)
         return lambda: session.request(
@@ -1762,7 +2466,7 @@ class Emails(_EmailsBase):
             self.host + path,
             data=body,
             auth=auth,
-            timeout=self.timeout,
+            timeout=self.timeout if timeout is None else timeout,
             allow_redirects=False,
         )
 
@@ -1906,6 +2610,54 @@ class AsyncEmails(_EmailsBase):
         _log_warnings(result)
         return result
 
+    @overload
+    async def batch(self, **kwargs: Unpack[TemplateBatchArgs]) -> SendBatchResult: ...
+
+    @overload
+    async def batch(self, **kwargs: Unpack[CodeBatchArgs]) -> SendBatchResult: ...
+
+    async def batch(self, **kwargs: Any) -> SendBatchResult:
+        """Queue the same email for many recipients, one email each.
+
+        Takes the same arguments, returns the same result and raises the same
+        errors as :meth:`Emails.batch`.
+        """
+        run = _prepare_batch(kwargs)
+        finish = self._start(_SEND_NOT_DONE)
+        try:
+            secret_key = self._secret_key(_SEND_KEY_NEEDED)
+            headers = _headers(secret_key, self.migrated_from, has_body=True)
+            try:
+                await self._call(
+                    self._batch_attempt(run, headers), run.answer, run.max_retries
+                )
+            except EmailError as error:
+                raise run.failure(error) from error
+        finally:
+            finish()
+        result = run.result()
+        _log_warnings(result)
+        return result
+
+    def _batch_attempt(
+        self, run: _BatchRun, headers: dict[str, str]
+    ) -> Callable[[], Awaitable[Any]]:
+        httpx, _ = self._get_client()
+        send = self._posthog_request(
+            "POST", _BATCH_PATH, run.body, headers, self._batch_timeout()
+        )
+        retry = self._retry_while_admitted()
+
+        async def attempt() -> Any:
+            retry()
+            try:
+                return await send()
+            except httpx.RequestError:
+                run.lost()
+                raise
+
+        return attempt
+
     async def _deliver(
         self, prepared: _PreparedSend, secret_key: str
     ) -> SendEmailResult:
@@ -1959,7 +2711,12 @@ class AsyncEmails(_EmailsBase):
             finish()
 
     def _posthog_request(
-        self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
+        self,
+        method: str,
+        path: str,
+        body: Optional[bytes],
+        headers: dict[str, str],
+        timeout: Optional[float] = None,
     ) -> Callable[[], Awaitable[Any]]:
         _, client = self._get_client()
         # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
@@ -1970,7 +2727,7 @@ class AsyncEmails(_EmailsBase):
             content=body,
             headers=headers,
             auth=None,
-            timeout=self.timeout,
+            timeout=self.timeout if timeout is None else timeout,
         )
 
     def _storage_request(self, upload: _Upload) -> Callable[[], Awaitable[Any]]:
