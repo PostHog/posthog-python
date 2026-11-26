@@ -94,7 +94,7 @@ def _experiment_option(key: str, value: Any) -> Any:
         return value
     elif key in ("expected_item_count", "expected_result_count"):
         return _count(value, key)
-    elif key == "dataset_revision_id":
+    elif key in ("dataset_revision_id", "experiment_scorer_version_id"):
         return None if value is None else _uuid(value)
     else:
         return _identifier(value, key)
