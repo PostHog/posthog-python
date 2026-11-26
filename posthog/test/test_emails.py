@@ -3225,6 +3225,26 @@ def test_a_send_now_answer_after_a_retry_counts_from_the_first_attempt(no_sleep)
     assert (result.id, result.status, result.scheduled_at) == ("msg_9", "queued", None)
 
 
+def test_a_retry_does_not_restart_the_send_now_window(no_sleep):
+    with moving_clock() as clock:
+        no_sleep.side_effect = lambda _seconds: clock.advance(30)
+        emails, adapter = emails_with(
+            [
+                rejected(503, "delivery_unavailable"),
+                accepted("msg_9", status="queued", scheduled_at=None),
+            ]
+        )
+
+        with pytest.raises(EmailError) as raised:
+            send(emails, scheduled_at=NOW + timedelta(seconds=62))
+
+    assert len(adapter.requests) == 2
+    assert (raised.value.code, raised.value.message_id) == (
+        "schedule_not_confirmed",
+        "msg_9",
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_send_now_answer_counts_from_the_first_attempt_not_the_answer():
     with moving_clock() as clock:
