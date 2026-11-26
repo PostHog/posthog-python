@@ -540,9 +540,10 @@ class RedisFlagCache:
         self.version_key = f"{key_prefix}version"
         # Listed results live outside the key_prefix namespace, so SDK versions
         # that ignore the listing digest never read them as unlisted results.
-        # Changing the prefix's last character keeps the two disjoint.
+        # A leading character that differs from the prefix's first one keeps the
+        # two disjoint, and the full prefix keeps each app's listed entries apart.
         self._listed_key_prefix = (
-            f"{key_prefix[:-1]}{'-' if key_prefix[-1] == '_' else '_'}"
+            f"{'-' if key_prefix[0] == '_' else '_'}{key_prefix}"
             f"{_KNOWN_ABSENT_LISTING}:"
             if key_prefix
             else None

@@ -1050,6 +1050,23 @@ class TestRedisFlagCache(unittest.TestCase):
             is None
         )
 
+    def test_listed_entries_stay_within_their_own_key_prefix(self):
+        caches = [
+            utils.RedisFlagCache(self.redis, key_prefix=key_prefix)
+            for key_prefix in ("project-1", "project-2", utils.CACHE_KEY_PREFIX)
+        ]
+        for writer in caches:
+            writer._set_cached_flag("user", "beta", True, 1, listing_digest="digest")
+            for reader in caches:
+                expected = True if reader is writer else None
+                assert (
+                    reader._get_stale_cached_flag(
+                        "user", "beta", listing_digest="digest"
+                    )
+                    is expected
+                )
+            writer.clear()
+
     def test_cache_key_and_serialization(self):
         assert self.cache._get_cache_key("user123", "beta") == "test:flags:user123:beta"
 
@@ -1395,7 +1412,7 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
-            (0, "test:flags_known_absent:*", 100),
+            (0, "_test:flags:known_absent:*", 100),
         ]
         assert self.cache._get_cache_key("user", "old") not in self.redis.store
         assert len(self.redis.store) == 5
@@ -1495,7 +1512,7 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
-            (0, "test:flags_known_absent:*", 100),
+            (0, "_test:flags:known_absent:*", 100),
         ]
         assert old_key not in self.redis.store
         assert invalid_key not in self.redis.store
@@ -1527,6 +1544,6 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
-            (0, "test:flags_known_absent:*", 100),
+            (0, "_test:flags:known_absent:*", 100),
         ]
         assert self.redis.store == {"other:key": "value"}
