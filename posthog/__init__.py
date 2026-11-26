@@ -112,6 +112,7 @@ def new_context(
 
     Contexts store shared identity, session ID, options, and tags in ``contextvars``:
 
+    - **Scope required.** ``identify_context()``, ``tag()``, and ``set_context_*()`` silently do nothing outside ``new_context()`` or ``@scoped()``.
     - **Propagation.** State carries across function calls and ``await`` automatically. New threads start with an empty context.
     - **Inheritance.** Child contexts inherit parent values without mutating the parent. Pass ``fresh=True`` at request or job boundaries to clear inherited state.
     - **Precedence.** Explicit arguments on ``capture()`` override context state, and context state overrides ``super_properties``.
@@ -141,6 +142,9 @@ def scoped(fresh=False, capture_exceptions: Optional[bool] = None):
     """
     Decorator that creates a new context for the function.
 
+    Works on both sync and ``async def`` functions. Put ``scoped`` closest to
+    the function when stacking decorators.
+
     Args:
         fresh: Whether to start with a fresh context (default: False)
         capture_exceptions: Whether to capture and track exceptions with posthog error tracking. If omitted, defaults to the global exception autocapture setting.
@@ -166,13 +170,16 @@ def set_context_session(session_id: str):
 
     Session IDs must be valid UUIDv7 strings. Forward PostHog JS's ``X-POSTHOG-SESSION-ID`` header here to link backend events to Session Replay.
 
+    Call this inside ``new_context()`` or ``@scoped()``. Calls outside a context do nothing.
+
     Args:
         session_id: The session ID to associate with the current context and its children
 
     Examples:
         ```python
-        from posthog import set_context_session
-        set_context_session("session_123")
+        from posthog import new_context, set_context_session
+        with new_context():
+            set_context_session("session_123")
         ```
 
     Category:
@@ -186,13 +193,16 @@ def set_context_device_id(device_id: str):
     Set the device ID for the current context, associating all feature flag requests
     in this or child contexts with the given device ID.
 
+    Call this inside ``new_context()`` or ``@scoped()``. Calls outside a context do nothing.
+
     Args:
         device_id: The device ID to associate with the current context and its children
 
     Examples:
         ```python
-        from posthog import set_context_device_id
-        set_context_device_id("device_123")
+        from posthog import new_context, set_context_device_id
+        with new_context():
+            set_context_device_id("device_123")
         ```
 
     Category:
@@ -205,13 +215,16 @@ def identify_context(distinct_id: str):
     """
     Identify the current context with a distinct ID.
 
+    Call this inside ``new_context()`` or ``@scoped()``. Calls outside a context do nothing.
+
     Args:
         distinct_id: The distinct ID to associate with the current context and its children
 
     Examples:
         ```python
-        from posthog import identify_context
-        identify_context("user_123")
+        from posthog import new_context, identify_context
+        with new_context():
+            identify_context("user_123")
         ```
 
     Category:
@@ -286,14 +299,17 @@ def tag(name: str, value: Any):
     """
     Add a tag to the current context.
 
+    Call this inside ``new_context()`` or ``@scoped()``. Calls outside a context do nothing.
+
     Args:
         name: The tag key
         value: The tag value
 
     Examples:
         ```python
-        from posthog import tag
-        tag("user_id", "123")
+        from posthog import new_context, tag
+        with new_context():
+            tag("plan", "pro")
         ```
 
     Category:

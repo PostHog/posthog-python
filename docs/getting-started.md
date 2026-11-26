@@ -28,6 +28,21 @@ posthog.capture("user_signed_up", distinct_id="user_123", properties={"plan": "f
 
 `capture` queues the event and returns right away. A background thread sends it.
 
+## Share context across calls
+
+Open a context with `new_context()` or `@scoped()`. Every event, exception, flag evaluation, and span inside shares the same user ID, session ID, and tags.
+
+```python
+with posthog.new_context():
+    posthog.identify_context("user_123")
+    posthog.tag("plan", "pro")
+    posthog.capture("checkout_started")
+```
+
+- **Open a context first.** `identify_context()`, `tag()`, and `set_context_*()` silently do nothing outside `new_context()` or `@scoped()`.
+- **Isolate requests and jobs.** Pass `fresh=True` at request or worker boundaries, so parent state doesn't leak. For web apps, use `PosthogASGIMiddleware` (FastAPI, Starlette, ASGI) or `PosthogContextMiddleware` (Django).
+- **Use with `AsyncPosthog`.** Contexts live in `contextvars`, so `from posthog import new_context, identify_context, tag` and `PosthogASGIMiddleware` apply to `AsyncPosthog` calls too.
+
 ## Shut down
 
 Call `shutdown()` before your process exits, so queued events are sent.
@@ -47,6 +62,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from posthog import AsyncPosthog
+from posthog.integrations.asgi import PosthogASGIMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,6 +71,7 @@ async def lifespan(app: FastAPI):
         yield
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(PosthogASGIMiddleware)
 ```
 
 ## The posthoganalytics package

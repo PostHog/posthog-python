@@ -110,6 +110,21 @@ posthog.capture("user_signed_up", distinct_id="user_123", properties={"plan": "f
 
 `capture` queues the event and returns right away. A background thread sends it.
 
+### Share context across calls
+
+Open a context with `new_context()` or `@scoped()`. Every event, exception, flag evaluation, and span inside shares the same user ID, session ID, and tags.
+
+```python
+with posthog.new_context():
+    posthog.identify_context("user_123")
+    posthog.tag("plan", "pro")
+    posthog.capture("checkout_started")
+```
+
+- **Open a context first.** `identify_context()`, `tag()`, and `set_context_*()` silently do nothing outside `new_context()` or `@scoped()`.
+- **Isolate requests and jobs.** Pass `fresh=True` at request or worker boundaries, so parent state doesn't leak. For web apps, use `PosthogASGIMiddleware` (FastAPI, Starlette, ASGI) or `PosthogContextMiddleware` (Django).
+- **Use with `AsyncPosthog`.** Contexts live in `contextvars`, so `from posthog import new_context, identify_context, tag` and `PosthogASGIMiddleware` apply to `AsyncPosthog` calls too.
+
 ### Shut down
 
 Call `shutdown()` before your process exits, so queued events are sent.
@@ -129,6 +144,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from posthog import AsyncPosthog
+from posthog.integrations.asgi import PosthogASGIMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -137,6 +153,7 @@ async def lifespan(app: FastAPI):
         yield
 
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(PosthogASGIMiddleware)
 ```
 
 ### The posthoganalytics package
@@ -981,6 +998,8 @@ new_context(fresh=False, capture_exceptions: Optional[bool] = None)
 
 Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#posthognew_context).
 
+Contexts store identity, session ID, options, and tags in `contextvars` across calls and `await`, then clear on exit. `identify_context()`, `tag()`, and `set_context_*()` silently do nothing outside a context.
+
 **Parameters:**
 
 Name | Description
@@ -1024,6 +1043,8 @@ Add a tag to the current context.
 Every event and exception captured in this context includes this key-value pair in its `properties`. Calling `set()` or `set_once()` in the context also saves active tags as person properties.
 
 If the same key appears in multiple places, explicit `properties` on the call win over context tags, and context tags win over `super_properties`.
+
+Calls outside `new_context()` or `@scoped()` do nothing.
 
 **Parameters:**
 
@@ -1087,7 +1108,7 @@ Identify the current context with a distinct ID.
 
 In Python SDK `6.0.0` and later, user identification uses the [contexts](/docs/libraries/python#posthognew_context) pattern rather than a separate `identify()` method.
 
-Call this method inside `new_context()`, and every event, exception, flag evaluation, and span in that context is automatically tagged with this `distinct_id`.
+Call this method inside `new_context()`, and every event, exception, flag evaluation, and span in that context is automatically tagged with this `distinct_id`. Calls outside a context do nothing.
 
 **Parameters:**
 
@@ -1865,10 +1886,11 @@ Queue methods write to memory and return right away. Network reads and lifecycle
 
 #### The differences from `Client`
 
-Constructor options match `Client(...)`, except in three places:
+Constructor options match `Client(...)`, except in four places:
 
 - **Remote flags only.** `secret_key` authenticates `get_remote_config_payload()` and `emails`. `AsyncPosthog` doesn't poll flag definitions locally.
 - **Async callbacks.** `before_send` and `on_error` accept regular functions or `async def` coroutines.
+- **Shared contexts.** `AsyncPosthog` has no context methods. Open a context with `posthog.new_context()`, `posthog.scoped()`, or `PosthogASGIMiddleware`, then call `posthog.identify_context()` and `posthog.tag()` inside it.
 - **Sync-only features.** `start_span()` and `sync_mode` live on sync `Posthog` only.
 
 ### `AsyncClient.capture`
@@ -2042,6 +2064,7 @@ Create a new context scope that will be active for the duration of the with bloc
 
 Contexts store shared identity, session ID, options, and tags in `contextvars`:
 
+- **Scope required.** `identify_context()`, `tag()`, and `set_context_*()` silently do nothing outside `new_context()` or `@scoped()`.
 - **Propagation.** State carries across function calls and `await` automatically. New threads start with an empty context.
 - **Inheritance.** Child contexts inherit parent values without mutating the parent. Pass `fresh=True` at request or job boundaries to clear inherited state.
 - **Precedence.** Explicit arguments on `capture()` override context state, and context state overrides `super_properties`.
@@ -2071,6 +2094,8 @@ scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 
 Decorator that creates a new context for the function.
 
+Works on both sync and `async def` functions. Put `scoped` closest to the function when stacking decorators.
+
 **Parameters:**
 
 Name | Description
@@ -2098,6 +2123,8 @@ Set the session ID for the current context.
 
 Session IDs must be valid UUIDv7 strings. Forward PostHog JS's `X-POSTHOG-SESSION-ID` header here to link backend events to Session Replay.
 
+Call this inside `new_context()` or `@scoped()`. Calls outside a context do nothing.
+
 **Parameters:**
 
 Name | Description
@@ -2107,8 +2134,9 @@ Name | Description
 **Examples:**
 
 ```python
-from posthog import set_context_session
-set_context_session("session_123")
+from posthog import new_context, set_context_session
+with new_context():
+    set_context_session("session_123")
 ```
 
 ### `posthog.set_context_device_id`
@@ -2119,6 +2147,8 @@ set_context_device_id(device_id: str)
 
 Set the device ID for the current context, associating all feature flag requests in this or child contexts with the given device ID.
 
+Call this inside `new_context()` or `@scoped()`. Calls outside a context do nothing.
+
 **Parameters:**
 
 Name | Description
@@ -2128,8 +2158,9 @@ Name | Description
 **Examples:**
 
 ```python
-from posthog import set_context_device_id
-set_context_device_id("device_123")
+from posthog import new_context, set_context_device_id
+with new_context():
+    set_context_device_id("device_123")
 ```
 
 ### `posthog.identify_context`
@@ -2140,6 +2171,8 @@ identify_context(distinct_id: str)
 
 Identify the current context with a distinct ID.
 
+Call this inside `new_context()` or `@scoped()`. Calls outside a context do nothing.
+
 **Parameters:**
 
 Name | Description
@@ -2149,8 +2182,9 @@ Name | Description
 **Examples:**
 
 ```python
-from posthog import identify_context
-identify_context("user_123")
+from posthog import new_context, identify_context
+with new_context():
+    identify_context("user_123")
 ```
 
 ### `posthog.set_capture_exception_code_variables_context`
@@ -2219,6 +2253,8 @@ tag(name: str, value: Any)
 
 Add a tag to the current context.
 
+Call this inside `new_context()` or `@scoped()`. Calls outside a context do nothing.
+
 **Parameters:**
 
 Name | Description
@@ -2229,8 +2265,9 @@ Name | Description
 **Examples:**
 
 ```python
-from posthog import tag
-tag("user_id", "123")
+from posthog import new_context, tag
+with new_context():
+    tag("plan", "pro")
 ```
 
 ### `posthog.get_tags`

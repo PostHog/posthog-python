@@ -205,10 +205,11 @@ class AsyncClient:
 
         #### The differences from ``Client``
 
-        Constructor options match ``Client(...)``, except in three places:
+        Constructor options match ``Client(...)``, except in four places:
 
         - **Remote flags only.** ``secret_key`` authenticates ``get_remote_config_payload()`` and ``emails``. ``AsyncPosthog`` doesn't poll flag definitions locally.
         - **Async callbacks.** ``before_send`` and ``on_error`` accept regular functions or ``async def`` coroutines.
+        - **Shared contexts.** ``AsyncPosthog`` has no context methods. Open a context with ``posthog.new_context()``, ``posthog.scoped()``, or ``PosthogASGIMiddleware``, then call ``posthog.identify_context()`` and ``posthog.tag()`` inside it.
         - **Sync-only features.** ``start_span()`` and ``sync_mode`` live on sync ``Posthog`` only.
         """
         if flush_at <= 0:

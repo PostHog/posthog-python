@@ -1933,6 +1933,10 @@ class Client(object):
         """
         Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#posthognew_context).
 
+        Contexts store identity, session ID, options, and tags in ``contextvars``
+        across calls and ``await``, then clear on exit. ``identify_context()``,
+        ``tag()``, and ``set_context_*()`` silently do nothing outside a context.
+
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
             capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
@@ -1980,6 +1984,8 @@ class Client(object):
 
         If the same key appears in multiple places, explicit ``properties`` on the
         call win over context tags, and context tags win over ``super_properties``.
+
+        Calls outside ``new_context()`` or ``@scoped()`` do nothing.
 
         Args:
             name: The tag key.
@@ -2045,7 +2051,7 @@ class Client(object):
 
         Call this method inside ``new_context()``, and every event, exception, flag
         evaluation, and span in that context is automatically tagged with this
-        ``distinct_id``.
+        ``distinct_id``. Calls outside a context do nothing.
 
         Args:
             distinct_id: The distinct ID to associate with the current context and its children.
