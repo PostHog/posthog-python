@@ -1878,6 +1878,8 @@ def _batch_response_error(
         and not _text(fields.get("attr"))
     ):
         fields = _batch_not_found(template_form)
+    if status == 413 and not code:
+        fields = {**fields, "code": "content_too_large"}
     if status == 413 and not _said(fields.get("fix")):
         fields = {
             **fields,
@@ -1902,7 +1904,7 @@ def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
             message="PostHog answered without a readable result for this email, so it may still go out.",
             message_id=message_id,
         )
-    code = _text(error.get("code")) or "api_error"
+    code = _said(error.get("code")) or "api_error"
     status = error.get("status")
     status_code = (
         status if isinstance(status, int) and not isinstance(status, bool) else None

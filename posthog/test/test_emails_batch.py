@@ -1135,6 +1135,51 @@ def test_an_unconfirmed_recipient_is_never_told_its_email_was_not_sent(answers):
             assert words not in said
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"status": 400, "detail": "Bad recipient."},
+        {"code": None, "status": 422, "detail": "Refused."},
+        {"code": "   ", "status": 503, "detail": "Later."},
+    ],
+    ids=["missing", "null", "blank"],
+)
+def test_a_recipient_error_without_a_code_leaves_that_recipient_unconfirmed(error):
+    emails, _ = emails_on(
+        [ok({"message_id": "m0", "status": "error", "error": error}, queued("m1"))]
+    )
+
+    first, second = batch(emails, recipients(2)).results
+
+    assert (first.status, first.idempotency_key, first.message_id) == (
+        "unconfirmed",
+        "key-0",
+        "m0",
+    )
+    assert first.error is not None
+    assert (first.error.message, first.error.fix) == (UNCONFIRMED, SEND_AGAIN)
+    assert second.status == "queued"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"<html>Request Entity Too Large</html>", {"detail": "Too large."}],
+    ids=["not_json", "json_without_code"],
+)
+def test_a_413_without_a_code_is_content_too_large_and_says_to_split(body):
+    emails, _ = emails_on([(413, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    error = raised.value
+    assert (error.code, error.status_code) == ("content_too_large", 413)
+    assert error.fix == (
+        "Split the recipients into smaller batches and send each with batch()."
+    )
+    assert [r.status for r in error.results] == ["failed", "failed"]
+
+
 def test_a_404_that_names_a_field_keeps_what_posthog_said():
     body = {"code": "not_found", "attr": "template_id", "detail": "No such template."}
     emails, _ = emails_on([(404, body, {})])
