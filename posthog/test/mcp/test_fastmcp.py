@@ -1,6 +1,7 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -232,6 +233,42 @@ async def test_analytics_flush_leaves_the_default_executor_free():
     finally:
         release.set()
         await flushing
+
+
+async def test_analytics_flush_does_not_queue_behind_stalled_flushes():
+    release = threading.Event()
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+
+    stalled = [instrument(make_server(), StalledFlushClient()) for _ in range(64)]
+    healthy_client = FakeClient()
+    healthy = instrument(make_server(), healthy_client)
+    flushing = [asyncio.ensure_future(analytics.flush()) for analytics in stalled]
+    await asyncio.sleep(0.05)
+    try:
+        await asyncio.wait_for(healthy.flush(), 1)
+        assert healthy_client.event_counts_at_flush == [0]
+    finally:
+        release.set()
+        await asyncio.gather(*flushing)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+async def test_analytics_flush_works_in_a_forked_child():
+    analytics = instrument(make_server(), FakeClient())
+    await analytics.flush()
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            asyncio.run(asyncio.wait_for(analytics.flush(), 2))
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
 
 
 async def test_initialize_emitted_once_per_session():

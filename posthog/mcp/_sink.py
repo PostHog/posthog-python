@@ -14,8 +14,9 @@ the client lifecycle — the host constructs it and calls ``shutdown()``.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import inspect
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -27,10 +28,6 @@ from ._posthog_events import PostHogCaptureEvent, build_posthog_capture_events
 from ._sanitization import sanitize_event
 from ._truncation import truncate_event
 from .types import BeforeSendFn, Event, McpEvent
-
-# Flushes block for up to their timeout when ingest stalls, so they get their own
-# threads instead of filling the loop's default executor (which also serves DNS).
-_flush_executor = ThreadPoolExecutor(thread_name_prefix="posthog-mcp-flush")
 
 
 @dataclass
@@ -124,9 +121,20 @@ class McpEventSink:
             log(f"Failed to capture PostHog event {full_event.get('id')}: {err}")
 
     async def flush(self) -> None:
+        # Client.flush() blocks for up to its timeout when ingest stalls. A thread
+        # per call keeps it out of any shared pool, so a stalled flush never delays
+        # another flush or the loop's default executor, and no pool outlives a fork.
+        done: concurrent.futures.Future[None] = concurrent.futures.Future()
+
+        def run() -> None:
+            try:
+                self._posthog.flush()
+                done.set_result(None)
+            except BaseException as err:
+                done.set_exception(err)
+
+        threading.Thread(target=run, name="posthog-mcp-flush", daemon=True).start()
         try:
-            await asyncio.get_running_loop().run_in_executor(
-                _flush_executor, self._posthog.flush
-            )
+            await asyncio.wrap_future(done)
         except Exception as err:
             log(f"Failed to flush PostHog events: {err}")
