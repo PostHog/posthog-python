@@ -80,12 +80,18 @@ if args[:2] == ["pr", "list"]:
     records = records[:int(args[args.index("--limit") + 1])]
 elif args[0] == "api":
     assert "--paginate" in args and "--slurp" in args
+    if "--jq" in args or "--template" in args:
+        sys.stderr.write("the `--slurp` option is not supported with `--jq` or `--template`\n")
+        sys.exit(1)
     number = args[1].split("/")[4]
     if int(number) in fixture.get("api_fail", []):
         sys.exit(1)
     records = fixture.get("comments", {}).get(number, [[]])
 else:
     raise AssertionError("Unexpected GitHub call: " + repr(args))
+if "--jq" not in args:
+    sys.stdout.write(json.dumps(records))
+    sys.exit(0)
 result = subprocess.run(
     ["jq", "-r", args[args.index("--jq") + 1]],
     input=json.dumps(records), text=True, capture_output=True, check=True,
