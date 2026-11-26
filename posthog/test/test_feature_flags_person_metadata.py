@@ -358,6 +358,36 @@ class TestPersonMetadataFilters(unittest.TestCase):
             {"target": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
         )
 
+    @parameterized.expand(
+        [
+            (
+                "earlier_condition",
+                [_condition([UNSUPPORTED_REGEX]), _condition([DEPENDS_ON_FIRST_SEEN])],
+            ),
+            (
+                "same_condition",
+                [_condition([DEPENDS_ON_FIRST_SEEN, UNSUPPORTED_REGEX])],
+            ),
+        ]
+    )
+    def test_static_cohort_dependency_keeps_the_higher_reason(self, _, conditions):
+        # The dependency needs the server, which ends evaluation. The earlier
+        # unsupported filter's reason still outranks unresolved_dependency.
+        dependency = _flag(_condition([IN_STATIC_COHORT]), key="dependency")
+        client = self._client([_flag(*conditions, key="target"), dependency], {})
+
+        snapshot = client.evaluate_flags(
+            "user-123",
+            person_properties={"name": "foo\n"},
+            flag_keys=["target"],
+            only_evaluate_locally=True,
+        )
+
+        self.assertEqual(
+            dict(snapshot.unresolved_flags),
+            {"target": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+
     def test_a_cohort_that_stops_early_keeps_the_higher_reason(self):
         # A dependency on a static cohort ends the cohort at once, whatever comes after it.
         flags_by_key = {
