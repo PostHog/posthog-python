@@ -642,6 +642,49 @@ class TestGroupConditionsWithoutGroupKey(unittest.TestCase):
         patch_flags.assert_not_called()
 
 
+class TestDirectGroupFlagMatchWithoutGroups(unittest.TestCase):
+    """A direct match_feature_flag_properties call without groups passes the
+    flag-level group's properties and bucketing value, so its conditions run."""
+
+    def match(self, conditions, **kwargs):
+        return match_feature_flag_properties(
+            _company_flag("group-flag", conditions),
+            "acme",
+            {"plan": "pro"},
+            bucketing_value="acme",
+            **kwargs,
+        )
+
+    def test_group_condition_matches_passed_properties(self):
+        self.assertIs(self.match([_plan_is_pro_condition()]), True)
+        self.assertIs(self.match([{"properties": [], "rollout_percentage": 100}]), True)
+
+    def test_group_condition_does_not_match_passed_properties(self):
+        condition = _plan_is_pro_condition()
+        condition["properties"][0]["value"] = "free"
+        self.assertIs(self.match([condition]), False)
+
+    def test_person_condition_matches_passed_properties(self):
+        self.assertIs(
+            self.match([_plan_is_pro_condition(aggregation_group_type_index=None)]),
+            True,
+        )
+
+    def test_explicit_empty_groups_skip_group_conditions(self):
+        self.assertIs(
+            self.match(
+                [{"properties": [], "rollout_percentage": 100}],
+                groups={},
+                group_type_mapping={"0": "company"},
+            ),
+            False,
+        )
+        self.assertIs(
+            self.match([{"properties": [], "rollout_percentage": 100}], groups={}),
+            False,
+        )
+
+
 class TestGroupFlagHoldoutWithoutGroupKey(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY, send=False)

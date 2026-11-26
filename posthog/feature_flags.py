@@ -897,7 +897,7 @@ def match_feature_flag_properties(
         device_id,
         bucketing_value,
         group_type_mapping or {},
-        groups or {},
+        groups,
         group_properties or {},
         property_matching_version,
         _evaluation_context,
@@ -1014,8 +1014,13 @@ def _get_condition_context(
             flag, _evaluation_context.distinct_id, _evaluation_context.device_id
         )
 
+    if groups is None and condition_aggregation == flag_aggregation:
+        # A direct caller that passes no groups passes the flag-level group's
+        # properties and bucketing value instead.
+        return properties, bucketing_value
+
     group_name = group_type_mapping.get(str(condition_aggregation))
-    if not group_name or not _is_usable_group_key(groups.get(group_name)):
+    if not group_name or not _is_usable_group_key((groups or {}).get(group_name)):
         log.debug(
             "Skipping group condition for flag '%s': group type index %s not available",
             flag.get("key", ""),
