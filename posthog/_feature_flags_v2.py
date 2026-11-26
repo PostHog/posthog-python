@@ -40,7 +40,7 @@ import hashlib
 import math
 import operator
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import (
     Any,
     Callable,
@@ -335,10 +335,15 @@ _Rule = Union[_TargetedRelease, _PercentageRollout, _Experiment]
 
 @dataclass(frozen=True)
 class _Config:
-    """A parsed ``filters`` document. ``default_value`` is ``None`` for a null default."""
+    """A parsed ``filters`` document. ``default_value`` is ``None`` for a null default.
+
+    ``compares_dates`` says whether a rule has a date filter, so that evaluating the
+    document can need the current time.
+    """
 
     default_value: Any
     rules: Tuple[_Rule, ...]
+    compares_dates: bool = False
 
 
 @dataclass(frozen=True)
@@ -423,7 +428,12 @@ def _read_config(filters: Any) -> _Config:
     parsed = tuple(_read_rule(rule, return_type) for rule in rules)
     if len({rule.id for rule in parsed}) != len(parsed):
         raise _malformed("rule.id")
-    return _Config(default_value, parsed)
+    compares_dates = any(
+        predicate.operator in _DATE_COMPARISONS
+        for rule in parsed
+        for predicate in rule.targeting
+    )
+    return _Config(default_value, parsed, compares_dates)
 
 
 def _check_json(document: Any) -> None:
@@ -734,6 +744,10 @@ def _evaluate_with_hash(
         return _Evaluated(None, "flag_disabled")
     if isinstance(config, _Unsupported):
         return config
+    if context.now is None and config.compares_dates:
+        # Every date of one evaluation counts back from the same time.
+        now = datetime.datetime.now(datetime.timezone.utc)
+        context = replace(context, now=now)
     draws = _Draws(context.identifier[:_MAX_IDENTIFIER_LENGTH], draw)
     try:
         for index, rule in enumerate(config.rules):
@@ -874,6 +888,12 @@ def _match_operator(
         return False
     if not present:
         return name in _OPERATORS_MATCHING_ABSENCE
+    if name in _NUMBER_COMPARISONS:
+        return _match_number(predicate, value)
+    if name in _DATE_COMPARISONS:
+        return _match_date(predicate, value, context)
+    # The other operators compare the value's JSON text.
+    _check_json_text(value)
     if name in _EXACT_OPERATORS:
         matching_version = 2 if context.explicit_exact_matching else 1
         matched = _match_exact_property(predicate.value, value, matching_version)
@@ -886,11 +906,27 @@ def _match_operator(
         text = _value_to_string(value, UnresolvedFlagReason.MISSING_CONTEXT)
         found = bool(_match_regex(predicate.value, text))
         return found if name == "regex" else not found
-    if name in _NUMBER_COMPARISONS:
-        return _match_number(predicate, value)
-    if name in _DATE_COMPARISONS:
-        return _match_date(predicate, value, context)
     return _match_semver(predicate, value)
+
+
+def _check_json_text(value: Any) -> None:
+    """Decline a property value that the reference cannot hold as JSON.
+
+    These are a number beyond binary64 and a value nested deeper than the reference's
+    JSON reader reads. The version 1 helpers that write the JSON text would raise on
+    the extreme ones: an integer too long to write out, or nesting deeper than Python
+    recurses.
+    """
+    pending = [(value, 1)]
+    while pending:
+        item, depth = pending.pop()
+        if isinstance(item, (dict, list)):
+            if depth > _MAX_JSON_DEPTH:
+                raise _unusable_context("A property value is nested too deeply")
+            children = item.values() if isinstance(item, dict) else item
+            pending.extend((child, depth + 1) for child in children)
+        elif _is_number(item) and not _is_json_scalar(item):
+            raise _unusable_context("A property value is a number JSON cannot carry")
 
 
 def _match_any_substring(predicate: _Predicate, value: Any) -> bool:

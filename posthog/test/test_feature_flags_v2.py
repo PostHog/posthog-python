@@ -12,7 +12,9 @@ from __future__ import annotations
 import collections
 import copy
 import datetime
+import itertools
 import struct
+import types
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -124,12 +126,13 @@ def _as_expectation(outcome: v2._Outcome) -> Dict[str, Any]:
             "value": outcome.value,
             "reason": outcome.reason,
         }
-        if outcome.rule_id is not None:
-            expectation["rule"] = {
-                "id": outcome.rule_id,
-                "rule_type": outcome.rule_type,
-                "index": outcome.rule_index,
-            }
+        rule = {
+            "id": outcome.rule_id,
+            "rule_type": outcome.rule_type,
+            "index": outcome.rule_index,
+        }
+        if any(field is not None for field in rule.values()):
+            expectation["rule"] = rule
         if outcome.variant_key is not None:
             expectation["variant"] = outcome.variant_key
         return expectation
@@ -214,6 +217,19 @@ def test_a_corpus_case_evaluates_to_its_exact_expected_result(case):
                 evidence["hash01_binary64_hex"],
             )
         ]
+
+
+def test_the_replay_compares_every_rule_field():
+    # A result without a rule matches an expectation without a ``rule`` member only
+    # when it has none of the three rule fields.
+    expected = {"status": "success", "value": False, "reason": "no_rule_match"}
+    stray = v2._Evaluated(False, "no_rule_match", rule_type="targeted_release")
+
+    assert _same_json(_as_expectation(v2._Evaluated(False, "no_rule_match")), expected)
+    assert not _same_json(_as_expectation(stray), expected)
+    assert not _same_json(
+        _as_expectation(v2._Evaluated(False, "no_rule_match", rule_index=0)), expected
+    )
 
 
 def test_the_replay_covers_every_corpus_case():
@@ -807,6 +823,16 @@ def test_a_number_operator_reads_numbers_like_the_flags_service(
         ("icontains", "pro", float("nan")),
         ("icontains_multi", ["pro"], NOW),
         ("regex", "pro", NOW),
+        # An integer beyond binary64, also one too long for Python to write out.
+        pytest.param("exact", "pro", 10**400, id="exact-400-digits"),
+        pytest.param("exact", "pro", 10**5000, id="exact-5000-digits"),
+        pytest.param("icontains", "pro", 10**5000, id="icontains-5000-digits"),
+        pytest.param("regex", "pro", 10**5000, id="regex-5000-digits"),
+        pytest.param("semver_eq", "1.2.3", 10**5000, id="semver-5000-digits"),
+        # Nesting deeper than a JSON reader reads, and than Python recurses.
+        pytest.param("exact", "pro", _nested(1500), id="exact-nested"),
+        pytest.param("icontains", "pro", _nested(1500), id="icontains-nested"),
+        pytest.param("semver_eq", "1.2.3", _nested(1500), id="semver-nested"),
     ],
 )
 def test_a_property_value_json_cannot_carry_is_inconclusive(
@@ -968,6 +994,30 @@ def test_a_relative_date_counts_back_from_the_current_time_by_default():
         True, "targeting_match", RULE_ID, "targeted_release", 0
     )
     assert evaluate(now - 7200) == v2._Evaluated(False, "no_rule_match")
+
+
+def test_every_relative_date_of_one_evaluation_counts_back_from_the_same_time(
+    monkeypatch,
+):
+    seconds = itertools.count()
+
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            # Each read of the clock is one second after the read before it.
+            return NOW + datetime.timedelta(seconds=next(seconds))
+
+    clock = types.SimpleNamespace(**{**vars(datetime), "datetime": Clock})
+    monkeypatch.setattr(v2, "datetime", clock)
+    config = v2._parse_config(
+        _filters(_targeted(_person("seen", "is_date_exact", "-1d")))
+    )
+    utc = datetime.timezone.utc
+    context = v2._Context("visitor-42", {"seen": "1d"}, True, True, utc)
+
+    assert v2._evaluate(config, context) == v2._Evaluated(
+        True, "targeting_match", RULE_ID, "targeted_release", 0
+    )
 
 
 def _hashes_drawn(
