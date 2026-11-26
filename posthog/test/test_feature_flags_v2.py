@@ -1,8 +1,10 @@
 """The evaluator for config version 2 flags, replayed against the evaluation corpora.
 
-The corpora and hash vectors in ``fixtures/feature_flag_rules_v2`` are copied unchanged
-from a ``PostHog/posthog-sdk-test-harness`` contract; ``SOURCE.json`` records which.
-Each corpus case gives a configuration, a person and the exact expected result.
+The corpora, the local outcome mapping and the hash vectors in
+``fixtures/feature_flag_rules_v2`` are copied unchanged from a
+``PostHog/posthog-sdk-test-harness`` contract; ``SOURCE.json`` records which. Each
+corpus case gives a configuration, a person and the exact expected result, and
+``local_outcomes.json`` says what a local evaluator does with it.
 """
 
 from __future__ import annotations
@@ -11,10 +13,12 @@ import collections
 import copy
 import datetime
 import struct
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+import jsonschema
 import pytest
+from referencing import Registry, Resource
 
 from posthog import _feature_flags_v2 as v2
 from posthog.test.test_flags_v4_response import _load
@@ -23,25 +27,19 @@ from posthog.types import UnresolvedFlagReason
 BOOLEAN_CORPUS = "v2_boolean_evaluation.json"
 VALUE_CORPUS = "v2_value_evaluation.json"
 EXPERIMENT_CORPUS = "v2_experiment_evaluation.json"
+LOCAL_CORPUS = "v2_local_evaluation.json"
+CORPORA = (BOOLEAN_CORPUS, VALUE_CORPUS, EXPERIMENT_CORPUS, LOCAL_CORPUS)
 HASH_VECTORS = _load("hash_sha1_60_v1.json")
+# The local outcome of a case, by the status and the error or parse error kind of its
+# expected result: conclusive, inconclusive with an unresolved reason, or not
+# applicable.
+LOCAL_OUTCOMES = _load("local_outcomes.json")
 
-# An ``omitted`` row describes the remote request boundary: the flags service leaves an
-# inactive, deleted or unrequested flag out of its response before it evaluates
-# anything. The evaluator has no such boundary, so these rows are skipped.
-OMITTED = "omitted"
-SKIP_OMITTED = "the row describes the remote request boundary, not the evaluator"
-
-# The kind of local outcome each corpus expectation stands for. The corpus states what
-# the reference evaluator returns; a later contract release states the local outcome of
-# each case itself, and then replaces this table.
-LOCAL_OUTCOMES: Dict[Tuple[str, Optional[str]], type] = {
-    ("success", None): v2._Evaluated,
-    ("error", "missing_context"): v2._Inconclusive,
-    ("error", "invalid_property"): v2._EvaluationError,
-    ("error", "invalid_regex"): v2._EvaluationError,
-    ("parse_error", "malformed"): v2._Unsupported,
-    ("parse_error", "unsupported"): v2._Unsupported,
-}
+# A ``not_applicable`` case describes the remote request boundary: the flags service
+# leaves an inactive, deleted or unrequested flag out of its response before it
+# evaluates anything. The evaluator has no such boundary, so these cases are skipped.
+NOT_APPLICABLE = "not_applicable"
+SKIP_NOT_APPLICABLE = "the case is about the remote request boundary, not the evaluator"
 
 
 def _corpus_cases(name: str) -> Iterator[Dict[str, Any]]:
@@ -57,13 +55,29 @@ def _corpus_cases(name: str) -> Iterator[Dict[str, Any]]:
         }
 
 
-CASES = [
+def _local_outcome(expected: Mapping[str, Any]) -> Dict[str, Any]:
+    """The row of the local outcome mapping for a case's expected result."""
+    [row] = [
+        row
+        for row in LOCAL_OUTCOMES["rows"]
+        if row["status"] == expected["status"]
+        and row.get("error") == expected.get("error")
+        and row.get("kind") == expected.get("kind")
+    ]
+    return row
+
+
+CASES = [case for name in CORPORA for case in _corpus_cases(name)]
+REPLAYED = [
     case
-    for name in (BOOLEAN_CORPUS, VALUE_CORPUS, EXPERIMENT_CORPUS)
-    for case in _corpus_cases(name)
+    for case in CASES
+    if _local_outcome(case["expected"])["local_evaluation"] != NOT_APPLICABLE
 ]
-REPLAYED = [case for case in CASES if case["expected"]["status"] != OMITTED]
-SKIPPED = [case for case in CASES if case["expected"]["status"] == OMITTED]
+SKIPPED = [
+    case
+    for case in CASES
+    if _local_outcome(case["expected"])["local_evaluation"] == NOT_APPLICABLE
+]
 
 
 def _binary64(hexadecimal: str) -> float:
@@ -159,7 +173,7 @@ def _replay(case: Dict[str, Any]) -> Tuple[v2._Outcome, List[Tuple[str, str, str
     "case",
     REPLAYED
     + [
-        pytest.param(case, marks=pytest.mark.skip(reason=SKIP_OMITTED))
+        pytest.param(case, marks=pytest.mark.skip(reason=SKIP_NOT_APPLICABLE))
         for case in SKIPPED
     ],
     ids=lambda case: case["id"],
@@ -168,9 +182,17 @@ def test_a_corpus_case_evaluates_to_its_exact_expected_result(case):
     expected = case["expected"]
     outcome, drawn = _replay(case)
 
-    kind = expected.get("error") or expected.get("kind")
-    assert type(outcome) is LOCAL_OUTCOMES[expected["status"], kind]
     assert _same_json(_as_expectation(outcome), expected), outcome
+    local = _local_outcome(expected)
+    if local["local_evaluation"] == "conclusive":
+        assert isinstance(outcome, v2._Evaluated)
+    else:
+        assert local["local_evaluation"] == "inconclusive"
+        assert not isinstance(outcome, v2._Evaluated)
+        # The evaluator names the reason of an inconclusive outcome. It leaves the
+        # reason of a rejected document or an evaluation error to its caller.
+        if isinstance(outcome, v2._Inconclusive):
+            assert outcome.reason.value == local["unresolved_reason"]
 
     evidence = case.get("hash_evidence")
     if isinstance(evidence, list):
@@ -195,6 +217,9 @@ def test_a_corpus_case_evaluates_to_its_exact_expected_result(case):
 
 
 def test_the_replay_covers_every_corpus_case():
+    # The replay reads each corpus the local outcome mapping covers.
+    files = _load("SOURCE.json")["files"]
+    assert [files[name]["source_path"] for name in CORPORA] == LOCAL_OUTCOMES["corpora"]
     statuses = collections.Counter(
         (case["corpus"], case["expected"]["status"]) for case in CASES
     )
@@ -202,11 +227,23 @@ def test_the_replay_covers_every_corpus_case():
         (BOOLEAN_CORPUS, "success"): 121,
         (BOOLEAN_CORPUS, "error"): 9,
         (BOOLEAN_CORPUS, "parse_error"): 2,
-        (BOOLEAN_CORPUS, OMITTED): 3,
+        (BOOLEAN_CORPUS, "omitted"): 3,
         (VALUE_CORPUS, "success"): 38,
         (VALUE_CORPUS, "parse_error"): 11,
         (EXPERIMENT_CORPUS, "success"): 60,
         (EXPERIMENT_CORPUS, "parse_error"): 13,
+        (LOCAL_CORPUS, "success"): 7,
+        (LOCAL_CORPUS, "error"): 1,
+    }
+    local_outcomes = collections.Counter(
+        (row["local_evaluation"], row.get("unresolved_reason"))
+        for row in (_local_outcome(case["expected"]) for case in CASES)
+    )
+    assert local_outcomes == {
+        ("conclusive", None): 226,
+        ("inconclusive", "missing_context"): 7,
+        ("inconclusive", "unsupported_definition"): 29,
+        (NOT_APPLICABLE, None): 3,
     }
     assert sorted(case["id"] for case in SKIPPED) == [
         "v2_boolean.eligibility.deleted",
@@ -232,7 +269,32 @@ def test_the_replay_covers_every_corpus_case():
         (EXPERIMENT_CORPUS, "values"): 9,
         (EXPERIMENT_CORPUS, "white_box"): 10,
         (EXPERIMENT_CORPUS, "parser"): 13,
+        (LOCAL_CORPUS, "flag_disabled"): 6,
+        (LOCAL_CORPUS, "context"): 2,
     }
+
+
+# The local evaluation files of the contract and the schema of each. The definitions
+# feed fixture is the dispatch's test input; its schema refers to the local corpus
+# schema by ID.
+LOCAL_EVALUATION_SCHEMAS = {
+    "local_outcomes.json": "local_outcomes.schema.json",
+    LOCAL_CORPUS: "v2_local_evaluation.schema.json",
+    "definitions_feed.json": "definitions_feed_fixture.schema.json",
+}
+
+
+@pytest.mark.parametrize("name", list(LOCAL_EVALUATION_SCHEMAS))
+def test_a_local_evaluation_file_matches_its_schema(name):
+    schemas = [_load(schema) for schema in LOCAL_EVALUATION_SCHEMAS.values()]
+    registry: Registry = Registry().with_resources(
+        (schema["$id"], Resource.from_contents(schema)) for schema in schemas
+    )
+    validator = jsonschema.Draft202012Validator(
+        _load(LOCAL_EVALUATION_SCHEMAS[name]), registry=registry
+    )
+
+    validator.validate(_load(name))
 
 
 # --- Hash vectors --------------------------------------------------------------------
