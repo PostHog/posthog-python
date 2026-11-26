@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import inspect
 import os
 import threading
@@ -62,6 +63,10 @@ def _start_client_flush(client: Any) -> "concurrent.futures.Future[None]":
             done.set_result(None)
         except BaseException as err:
             done.set_exception(err)
+        finally:
+            with _client_flushes_lock:
+                if _client_flushes.get(client) is done:
+                    del _client_flushes[client]
 
     threading.Thread(target=run, name="posthog-mcp-flush", daemon=True).start()
     return done
@@ -178,7 +183,9 @@ class McpEventSink:
             with _client_flushes_lock:
                 running = _client_flushes.get(self._posthog)
             if running is not None:
-                await asyncio.wait({asyncio.wrap_future(running)})
+                # Its failure is logged by the caller that started it.
+                with contextlib.suppress(Exception):
+                    await asyncio.wrap_future(running)
             await asyncio.wrap_future(
                 _client_flush_started_after(self._posthog, running)
             )

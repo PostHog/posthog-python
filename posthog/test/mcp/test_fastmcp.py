@@ -1,7 +1,9 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+import gc
 import os
+import weakref
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
@@ -317,6 +319,46 @@ async def test_overlapping_analytics_flushes_run_one_client_flush_at_a_time():
     await asyncio.wait_for(asyncio.gather(*flushing), 2)
 
     assert client.most_running == 1
+
+
+async def test_a_failed_analytics_flush_lets_the_client_be_collected():
+    client = _FailingFlushClient()
+    analytics = instrument(make_server(), client)
+    await analytics.flush()
+    client_ref = weakref.ref(client)
+    for thread in threading.enumerate():
+        if thread.name == "posthog-mcp-flush":
+            thread.join(timeout=2)
+    await asyncio.sleep(0)
+
+    del client, analytics
+    gc.collect()
+
+    assert client_ref() is None
+
+
+async def test_a_failed_earlier_flush_does_not_reach_the_loop_exception_handler():
+    loop_errors = []
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+    release = threading.Event()
+
+    class StalledFailingClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+            raise RuntimeError("network down")
+
+    client = StalledFailingClient()
+    first = asyncio.ensure_future(instrument(make_server(), client).flush())
+    await asyncio.sleep(0.05)
+    second = asyncio.ensure_future(instrument(make_server(), client).flush())
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 2)
+    gc.collect()
+    await asyncio.sleep(0)
+
+    assert loop_errors == []
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
