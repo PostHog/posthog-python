@@ -291,6 +291,34 @@ async def test_analytics_flush_does_not_queue_behind_stalled_flushes():
         await asyncio.gather(*flushing)
 
 
+async def test_overlapping_analytics_flushes_run_one_client_flush_at_a_time():
+    release = threading.Event()
+    lock = threading.Lock()
+
+    class StalledFlushClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.running = 0
+            self.most_running = 0
+
+        def flush(self, timeout_seconds=10):
+            with lock:
+                self.running += 1
+                self.most_running = max(self.most_running, self.running)
+            release.wait(timeout=5)
+            with lock:
+                self.running -= 1
+
+    client = StalledFlushClient()
+    handles = [instrument(make_server(), client) for _ in range(20)]
+    flushing = [asyncio.ensure_future(analytics.flush()) for analytics in handles]
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*flushing), 2)
+
+    assert client.most_running == 1
+
+
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
 async def test_analytics_flush_works_in_a_forked_child():
     analytics = instrument(make_server(), FakeClient())
