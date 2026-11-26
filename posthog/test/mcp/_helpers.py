@@ -18,6 +18,7 @@ class FakeClient:
 
     def __init__(self):
         self.events = []
+        self.event_counts_at_flush = []
 
     def capture(
         self,
@@ -37,6 +38,9 @@ class FakeClient:
             }
         )
         return None
+
+    def flush(self, timeout_seconds=10):
+        self.event_counts_at_flush.append(len(self.events))
 
 
 async def flush_background():

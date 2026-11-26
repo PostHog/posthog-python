@@ -628,6 +628,7 @@ attribute posthog.ai.langchain.callbacks.SpanMetadata.end_time: Optional[float]
 attribute posthog.ai.langchain.callbacks.SpanMetadata.input: Optional[Any]
 attribute posthog.ai.langchain.callbacks.SpanMetadata.latency: float
 attribute posthog.ai.langchain.callbacks.SpanMetadata.name: str
+attribute posthog.ai.langchain.callbacks.SpanMetadata.span_type: Optional[str] = field(default=None, kw_only=True)
 attribute posthog.ai.langchain.callbacks.SpanMetadata.start_time: float
 attribute posthog.ai.langchain.callbacks.log = logging.getLogger('posthog')
 attribute posthog.ai.langchain.middleware.PostHogMiddleware.state_schema = _PostHogMiddlewareState
@@ -796,6 +797,8 @@ attribute posthog.before_send = None
 attribute posthog.bucketed_rate_limiter.Number = Union[int, float]
 attribute posthog.bucketed_rate_limiter.ONE_DAY_IN_SECONDS = 86400.0
 attribute posthog.bucketed_rate_limiter.log = logging.getLogger('posthog')
+attribute posthog.capture_ai_max_queue_size = None
+attribute posthog.capture_ai_timeout = None
 attribute posthog.capture_compression.CAPTURE_COMPRESSION_ENV_VAR = 'POSTHOG_CAPTURE_COMPRESSION'
 attribute posthog.capture_compression.CaptureCompression.DEFLATE = 'deflate'
 attribute posthog.capture_compression.CaptureCompression.GZIP = 'gzip'
@@ -1078,6 +1081,8 @@ attribute posthog.integrations.flask.PosthogFlaskIntegration.request_filter = re
 attribute posthog.integrations.flask.PosthogFlaskIntegration.trust_tracing_headers: bool
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
+attribute posthog.max_queue_size = None
+attribute posthog.max_retries = None
 attribute posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware.app = app
 attribute posthog.mcp.constants.POSTHOG_MCP_ANALYTICS_SOURCE = 'posthog_mcp_analytics'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsEvent.CUSTOM = '$mcp_custom'
@@ -1238,6 +1243,7 @@ attribute posthog.send = True
 attribute posthog.super_options = None
 attribute posthog.super_properties = None
 attribute posthog.sync_mode = False
+attribute posthog.timeout = None
 attribute posthog.traces = None
 attribute posthog.types.BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.BeforeSpanSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
@@ -1368,9 +1374,9 @@ class posthog.ai.gemini.gemini_async.AsyncModels(api_key: Optional[str] = None, 
 class posthog.ai.gemini.gemini_converter.GeminiMessage 
 class posthog.ai.gemini.gemini_converter.GeminiPart 
 class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[Dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None)
-class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None)
+class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, *, span_type: Optional[str] = None)
 class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int], cache_write_5m_tokens: Optional[int] = None, cache_write_1h_tokens: Optional[int] = None, web_search_count: Optional[int] = None)
-class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any])
+class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], *, span_type: Optional[str] = None)
 class posthog.ai.langchain.middleware.PostHogMiddleware(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[dict[str, Any]] = None, options: Optional[dict[str, Any]] = None)
 class posthog.ai.openai.openai.OpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai.WrappedBeta 

@@ -4279,8 +4279,8 @@ class Client(object):
             self.log.warning(
                 f"[FEATURE FLAGS] {len(unsupported_definition_keys)} flag(s) use "
                 "something local evaluation doesn't support, such as a static "
-                "cohort, an unknown operator, a malformed value, or a missing or "
-                "circular flag dependency "
+                "cohort, an unknown operator or filter type, a malformed value, or a "
+                "missing or circular flag dependency "
                 f"(reason: {UnresolvedFlagReason.UNSUPPORTED_DEFINITION.value}): "
                 f"{', '.join(unsupported_definition_keys)}. Evaluating them makes a "
                 "remote request when evaluation reaches that part, or leaves them "

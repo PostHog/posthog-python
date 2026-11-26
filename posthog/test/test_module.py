@@ -68,8 +68,27 @@ class TestModule(unittest.TestCase):
         )
 
 
+CAPTURE_SETTINGS = (
+    "max_queue_size",
+    "max_retries",
+    "timeout",
+    "capture_ai_max_queue_size",
+    "capture_ai_timeout",
+)
+
+
+def lane_settings(client):
+    return {
+        lane.name: (lane.queue.maxsize, lane.timeout, lane.max_retries)
+        for lane in (client._analytics_lane, client._ai_lane)
+    }
+
+
 class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):
+        for setting in CAPTURE_SETTINGS:
+            self.addCleanup(setattr, posthog, setting, getattr(posthog, setting))
+            setattr(posthog, setting, None)
         self._original_default_client = posthog.default_client
         self._original_api_key = posthog.api_key
         self._original_project_api_key = posthog.project_api_key
@@ -170,6 +189,27 @@ class TestModuleLevelSetup(unittest.TestCase):
         client = posthog.setup()
 
         self.assertEqual(getattr(client, setting), value)
+
+    def test_setup_sizes_each_capture_lane_from_the_module_settings(self):
+        posthog.api_key = "phc_test"
+        posthog.max_queue_size = 7
+        posthog.max_retries = 0
+        posthog.timeout = 4
+        posthog.capture_ai_max_queue_size = 3
+        posthog.capture_ai_timeout = 9
+
+        client = posthog.setup()
+
+        analytics, ai = lane_settings(client).values()
+        self.assertEqual(analytics, (7, 4, 0))
+        self.assertEqual(ai, (3, 9, 0))
+
+    def test_setup_keeps_the_client_defaults_for_unset_capture_settings(self):
+        posthog.api_key = "phc_test"
+        explicit = Posthog("phc_test", send=False)
+        self.addCleanup(explicit.shutdown)
+
+        self.assertEqual(lane_settings(posthog.setup()), lane_settings(explicit))
 
     def test_setup_propagates_and_updates_privacy_mode(self):
         posthog.api_key = "phc_test"

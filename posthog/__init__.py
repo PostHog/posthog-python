@@ -466,6 +466,17 @@ Attributes:
         each exception type's bucket.
     exception_autocapture_refill_interval_seconds: Seconds between token refills
         for autocaptured exception rate limiting.
+    max_queue_size: Maximum number of analytics events buffered before upload.
+        ``None`` keeps the client default. AI events use
+        ``capture_ai_max_queue_size``.
+    max_retries: Number of upload retries on both capture lanes. ``None`` keeps
+        the client default.
+    timeout: Seconds allowed for one analytics upload request. ``None`` keeps the
+        client default. AI uploads use ``capture_ai_timeout``.
+    capture_ai_max_queue_size: Maximum number of AI events buffered before upload.
+        ``None`` keeps the client default.
+    capture_ai_timeout: Seconds allowed for one AI upload request. ``None`` keeps
+        the client default.
 """
 # Deprecated legacy alias for project_api_key. Kept for backwards compatibility.
 api_key = None  # type: Optional[str]
@@ -502,6 +513,13 @@ flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvi
 # Captures full AI content in AI SDK wrapper events: skips truncation and
 # passes media unredacted. `privacy_mode` always wins.
 enable_full_ai_capture = False  # type: bool
+# Queue, retry and timeout settings for the global client's two capture lanes.
+# `None` keeps the client's own default.
+max_queue_size = None  # type: Optional[int]
+max_retries = None  # type: Optional[int]
+timeout = None  # type: Optional[float]
+capture_ai_max_queue_size = None  # type: Optional[int]
+capture_ai_timeout = None  # type: Optional[float]
 # Deprecated aliases for `enable_full_ai_capture`.
 _use_ai_lane = False  # type: bool
 _enable_multimodal_capture = False  # type: bool
@@ -1512,8 +1530,20 @@ def setup() -> Client:
     global default_client
     if not default_client:
         configured_api_key = (project_api_key or "").strip() or (api_key or "").strip()
+        capture_settings: Dict[str, Any] = {
+            "max_queue_size": max_queue_size,
+            "max_retries": max_retries,
+            "timeout": timeout,
+            "capture_ai_max_queue_size": capture_ai_max_queue_size,
+            "capture_ai_timeout": capture_ai_timeout,
+        }
         default_client = Client(
             configured_api_key,
+            **{
+                name: value
+                for name, value in capture_settings.items()
+                if value is not None
+            },
             host=host,
             debug=debug,
             on_error=on_error,

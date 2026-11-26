@@ -277,7 +277,7 @@ class Experiment:
         return None if self._submission is None else json.loads(self._submission)
 
     def get_tags(self) -> tuple[str, ...]:
-        """Fetch current tags using a personal key with ``evaluation:read``."""
+        """Fetch current tags using a key with ``evaluation:read``."""
         with self._lock:
             data = self._transport.request("GET", self._path)
             return _experiment_tags(data, self.id)
@@ -285,7 +285,7 @@ class Experiment:
     def set_tags(self, tags: Sequence[str]) -> tuple[str, ...]:
         """Replace tags and return the server's normalized names; [] clears them.
 
-        Requires a personal key with ``evaluation:write``. Tags can change after
+        Requires a key with ``evaluation:write``. Tags can change after
         completion and are separate from the immutable creation ``submission``.
         Updates are not retried automatically: inspect tags after a lost response.
         """
@@ -645,11 +645,11 @@ class AsyncExperiment:
 class OfflineEvaluations:
     """Upload offline evaluations and manage scorers and datasets in one project.
 
-    ``secret_key`` accepts personal or project secret keys with
-    offline_evaluation_ingestion:write. Scorer reads/writes require a personal
-    key with llm_analytics:read/write; datasets require dataset:read/write.
-    Editing accepted data requires an evaluation editor's personal key with
-    evaluation:write. Result operations and item deletion also need scorer access.
+    Pass a personal API key or a project secret API key for this project.
+    Uploads require offline_evaluation_ingestion:write. Scorers use
+    llm_analytics:read/write and datasets use dataset:read/write. Corrections
+    require evaluation:write. Result edits and item deletion also require
+    llm_analytics:read. Personal keys need the user's resource permissions.
     Each operation requires its corresponding product feature to be enabled.
     ``host`` defaults to the US app API; known ingestion hosts are mapped to
     their app hosts. Custom hosts are preserved. Requests use a 15 second
