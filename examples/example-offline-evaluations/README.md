@@ -6,33 +6,35 @@ Upload evaluations you have already run, manage reusable scorers and datasets, a
 
 Offline evaluations must be enabled for your PostHog project. Use the project's numeric ID and the app host (`https://us.posthog.com`, `https://eu.posthog.com`, or your self-hosted URL).
 
-| Operation | Credential and scopes |
+Use a project secret API key for the project ID you pass to the client, or a personal API key. Grant the scopes for the calls your script makes. Personal keys also need the user's resource access, including evaluation editor access for corrections. Dataset exports require a personal API key with `dataset:read`.
+
+| Operation | Required scopes |
 | --- | --- |
-| Create experiments, upload results, complete/fail | Personal API key or project secret key with `offline_evaluation_ingestion:write` |
-| Fetch scorers and versions | Personal API key with `llm_analytics:read` |
-| Validate a composite formula without saving | Personal API key with `llm_analytics:read` |
-| Calculate composites using previously stored inputs | Personal API key with ingestion access, `evaluation:read`, and `llm_analytics:read` |
-| Create/update scorers and create versions | Personal API key with `llm_analytics:write` |
-| Fetch datasets, items, and history | Personal API key with `dataset:read` |
-| Create/update/archive/restore datasets and items | Personal API key with `dataset:write` |
-| Read experiment tags | Personal API key with `evaluation:read` |
-| Replace experiment tags | Personal API key with `evaluation:write` |
-| Read an item or result revision | Personal API key with `evaluation:read`. Result reads also require `llm_analytics:read` and access to the scorer. |
-| Update an item or update/delete its payload | Personal API key with `evaluation:write` and evaluation editor access |
-| Delete an item, change/delete a result or its payload | Personal API key with `evaluation:write`, evaluation editor access, `llm_analytics:read`, and access to affected scorers and composite inputs |
+| Create experiments, upload results, complete/fail | `offline_evaluation_ingestion:write` |
+| Fetch scorers and versions | `llm_analytics:read` |
+| Validate a composite formula without saving | `llm_analytics:read` |
+| Calculate composites using previously stored inputs | `offline_evaluation_ingestion:write`, `evaluation:read`, and `llm_analytics:read` |
+| Create/update scorers and create versions | `llm_analytics:write` |
+| Fetch datasets, items, and history | `dataset:read` |
+| Create/update/archive/restore datasets and items | `dataset:write` |
+| Read experiment tags | `evaluation:read` |
+| Replace experiment tags | `evaluation:write` |
+| Read an item or result revision | `evaluation:read`. Result revision reads also require `llm_analytics:read`. |
+| Update an item or update/delete its payload | `evaluation:write` |
+| Delete an item, change/delete a result or its payload | `evaluation:write` and `llm_analytics:read` |
 
-A personal key can cover both scorer management and uploads. Project secret keys can upload using a known scorer-version UUID without scorer read access. All operations use the explicit project/environment; scorer names are not unique.
+A single key can cover both scorer management and uploads. An ingestion-only key can upload using a known scorer-version UUID without scorer read access. All operations use the explicit project/environment; scorer names are not unique.
 
-Dataset operations also require the datasets feature to be enabled. Dataset reads, scorer reads, and experiment uploads use their own scopes; an upload-only credential cannot fetch a dataset. Keep personal keys in server-side scripts or CI secrets.
+Dataset operations also require the datasets feature to be enabled. Dataset reads, scorer reads, and experiment uploads use their own scopes; an upload-only credential cannot fetch a dataset. Keep both types of key in server-side scripts or CI secrets.
 
 From this repository's root:
 
 ```bash
 export POSTHOG_PROJECT_ID=123
-export POSTHOG_SECRET_KEY='your-secret-key'
+export POSTHOG_SECRET_KEY="$POSTHOG_PROJECT_SECRET_API_KEY"
 export POSTHOG_HOST='https://us.posthog.com'
 
-# Optional one-time provisioning; requires a personal key.
+# Optional one-time provisioning; requires `llm_analytics:write`.
 uv run python examples/example-offline-evaluations/main.py --create-scorer
 
 # Use the stable scorer ID printed above; its current version is fetched once.
@@ -101,7 +103,7 @@ The client context manager releases connections. Call `complete()` explicitly af
 
 Composite scorers calculate one score per item on the PostHog server from exact reported scorer versions. They can return numeric, boolean, or categorical values. This requires a backend with composite scorer support; ordinary uploads remain compatible with older backends.
 
-Provision a composite once, using a personal key with scorer write access. This example assumes `correctness_version_id` identifies a reported boolean scorer and `relevance_version_id` a reported numeric scorer:
+Provision a composite once, using a key with `llm_analytics:write`. This example assumes `correctness_version_id` identifies a reported boolean scorer and `relevance_version_id` a reported numeric scorer:
 
 ```python
 from posthog.ai.evaluations import ScorerComposition
@@ -149,7 +151,7 @@ experiment.complete()
 
 Calculation declarations contain only the item reference, scorer version, and `calculate=True`. Do not supply a value, reasoning, metadata, evaluator trace, or evaluation time. An item may also be referenced by its already accepted UUID.
 
-Project secret keys and ingestion-only personal keys must supply **every pinned input result in the same HTTP request**, including on retries. Previously uploaded inputs may be resubmitted with their original values and metadata. Reusing stored inputs without resubmitting them requires both `evaluation:read` and `llm_analytics:read`, in addition to ingestion access. Composite requests and retries also require current access to the composite and its inputs.
+Ingestion-only keys must supply **every pinned input result in the same HTTP request**, including on retries. Previously uploaded inputs may be resubmitted with their original values and metadata. Reusing stored inputs without resubmitting them requires both `evaluation:read` and `llm_analytics:read`, in addition to ingestion access. Composite requests and retries also require current access to the composite and its inputs.
 
 The SDK keeps all supplied results for a composite-bearing item together without fetching scorer definitions. It preserves order, so interleaved composite items can form a larger indivisible group. Group each item's results together for large batches. If a group exceeds 1,000 items/results or 5 MiB, the entire call fails locally before any upload. The SDK cannot check that your supplied inputs match the pinned formula without read access; the server validates this. Missing inputs reject the whole HTTP request. Inputs can appear before or after their composite in that request.
 
@@ -174,7 +176,7 @@ The state file includes both reported and calculation declarations and the combi
 
 Use `evaluations.datasets` to manage PostHog-hosted datasets with the same client configuration as scorers and experiments. Dataset names are unique within a project; keep the returned UUID for subsequent operations.
 
-Provision a dataset once with a personal key that has `dataset:write`:
+Provision a dataset once with a key that has `dataset:write`:
 
 ```python
 dataset = evaluations.datasets.create(
@@ -204,7 +206,7 @@ def capital_answer(question):
         question, "I don't know"
     )
 
-with OfflineEvaluations(project_id=123, secret_key=personal_api_key) as evaluations:
+with OfflineEvaluations(project_id=123, secret_key=secret_key) as evaluations:
     snapshot = evaluations.datasets.snapshot(dataset_id)  # Resolve latest once.
     scorer = evaluations.scorers.get(scorer_id)  # A boolean exact-match scorer.
     version_id = scorer.current_version_id
@@ -304,7 +306,7 @@ Await management methods and snapshot creation. Use `async for` on `iter_items()
 from posthog.ai.evaluations import AsyncOfflineEvaluations, EvaluationItem
 
 async with AsyncOfflineEvaluations(
-    project_id=123, secret_key=personal_api_key,
+    project_id=123, secret_key=secret_key,
 ) as evaluations:
     snapshot = await evaluations.datasets.snapshot(dataset_id)
     scorer = await evaluations.scorers.get(scorer_id)
@@ -424,7 +426,7 @@ print(experiment.get_tags())
 experiment.set_tags([])  # Remove all tags.
 ```
 
-Reading and writing experiment tags require the personal-key scopes listed above; an upload-only project secret key cannot manage tags. Tag updates do not change the saved `submission`, lifecycle `receipt`, or scorer versions. They are not retried automatically: after a lost acknowledgment, read the current tags before deciding whether to repeat the replacement, since another caller may have edited them.
+Reading and writing experiment tags require `evaluation:read` and `evaluation:write`, respectively; an upload-only project secret key cannot manage tags. Tag updates do not change the saved `submission`, lifecycle `receipt`, or scorer versions. They are not retried automatically: after a lost acknowledgment, read the current tags before deciding whether to repeat the replacement, since another caller may have edited them.
 
 The async client exposes the same API: await scorer methods and `experiment.get_tags()` / `experiment.set_tags(...)`.
 

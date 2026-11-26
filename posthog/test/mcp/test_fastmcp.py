@@ -1,6 +1,11 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+import gc
+import os
+import weakref
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +13,7 @@ import pytest
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 
-from posthog.mcp import instrument
+from posthog.mcp import instrument, set_logger
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
@@ -172,7 +177,7 @@ async def test_tool_call_captures_client_model_without_prior_listing():
     assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
-async def test_analytics_flush_drains_its_own_captures():
+async def test_analytics_flush_sends_its_captures():
     async def slow_before_send(event):
         await asyncio.sleep(0.05)
         return event
@@ -191,6 +196,185 @@ async def test_analytics_flush_drains_its_own_captures():
     await analytics.flush()
 
     assert len(_events(client, "$mcp_tool_call")) == 1
+    assert client.event_counts_at_flush == [len(client.events)]
+
+
+class _FailingFlushClient(FakeClient):
+    def flush(self, timeout_seconds=10):
+        raise RuntimeError("network down")
+
+
+def _fail_thread_start(self):
+    raise RuntimeError("can't start new thread")
+
+
+@pytest.mark.parametrize(
+    "client_class, thread_start, expected_log",
+    [
+        (_FailingFlushClient, None, "network down"),
+        (FakeClient, _fail_thread_start, "can't start new thread"),
+    ],
+    ids=["client flush raises", "thread start raises"],
+)
+async def test_analytics_flush_logs_instead_of_raising(
+    monkeypatch, client_class, thread_start, expected_log
+):
+    if thread_start is not None:
+        monkeypatch.setattr(threading.Thread, "start", thread_start)
+    lines = []
+    try:
+        analytics = instrument(
+            make_server(), client_class(), MCPAnalyticsOptions(logger=lines.append)
+        )
+        await analytics.flush()
+    finally:
+        set_logger(None)
+
+    assert any(expected_log in line for line in lines)
+
+
+async def test_cancelled_analytics_flush_leaves_the_worker_quiet(monkeypatch):
+    release = threading.Event()
+    finished = threading.Event()
+    thread_errors = []
+    monkeypatch.setattr(threading, "excepthook", thread_errors.append)
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+            finished.set()
+
+    analytics = instrument(make_server(), StalledFlushClient())
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(analytics.flush(), 0.05)
+    release.set()
+    assert finished.wait(timeout=2)
+    await asyncio.sleep(0.05)
+
+    assert thread_errors == []
+
+
+async def test_analytics_flush_leaves_the_default_executor_free():
+    release = threading.Event()
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    analytics = instrument(make_server(), StalledFlushClient())
+    flushing = asyncio.ensure_future(analytics.flush())
+    await asyncio.sleep(0.05)
+    try:
+        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: 1), 1) == 1
+    finally:
+        release.set()
+        await flushing
+
+
+async def test_analytics_flush_does_not_queue_behind_stalled_flushes():
+    release = threading.Event()
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+
+    stalled = [instrument(make_server(), StalledFlushClient()) for _ in range(64)]
+    healthy_client = FakeClient()
+    healthy = instrument(make_server(), healthy_client)
+    flushing = [asyncio.ensure_future(analytics.flush()) for analytics in stalled]
+    await asyncio.sleep(0.05)
+    try:
+        await asyncio.wait_for(healthy.flush(), 1)
+        assert healthy_client.event_counts_at_flush == [0]
+    finally:
+        release.set()
+        await asyncio.gather(*flushing)
+
+
+async def test_overlapping_analytics_flushes_run_one_client_flush_at_a_time():
+    release = threading.Event()
+    lock = threading.Lock()
+
+    class StalledFlushClient(FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.running = 0
+            self.most_running = 0
+
+        def flush(self, timeout_seconds=10):
+            with lock:
+                self.running += 1
+                self.most_running = max(self.most_running, self.running)
+            release.wait(timeout=5)
+            with lock:
+                self.running -= 1
+
+    client = StalledFlushClient()
+    handles = [instrument(make_server(), client) for _ in range(20)]
+    flushing = [asyncio.ensure_future(analytics.flush()) for analytics in handles]
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*flushing), 2)
+
+    assert client.most_running == 1
+
+
+async def test_a_failed_analytics_flush_lets_the_client_be_collected():
+    client = _FailingFlushClient()
+    analytics = instrument(make_server(), client)
+    await analytics.flush()
+    client_ref = weakref.ref(client)
+    for thread in threading.enumerate():
+        if thread.name == "posthog-mcp-flush":
+            thread.join(timeout=2)
+    await asyncio.sleep(0)
+
+    del client, analytics
+    gc.collect()
+
+    assert client_ref() is None
+
+
+async def test_a_failed_earlier_flush_does_not_reach_the_loop_exception_handler():
+    loop_errors = []
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+    release = threading.Event()
+
+    class StalledFailingClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+            raise RuntimeError("network down")
+
+    client = StalledFailingClient()
+    first = asyncio.ensure_future(instrument(make_server(), client).flush())
+    await asyncio.sleep(0.05)
+    second = asyncio.ensure_future(instrument(make_server(), client).flush())
+    await asyncio.sleep(0.05)
+    release.set()
+    await asyncio.wait_for(asyncio.gather(first, second), 2)
+    gc.collect()
+    await asyncio.sleep(0)
+
+    assert loop_errors == []
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+async def test_analytics_flush_works_in_a_forked_child():
+    analytics = instrument(make_server(), FakeClient())
+    await analytics.flush()
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            asyncio.run(asyncio.wait_for(analytics.flush(), 2))
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
 
 
 async def test_initialize_emitted_once_per_session():

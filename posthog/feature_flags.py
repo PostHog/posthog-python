@@ -629,6 +629,7 @@ def _match_flag_conditions(
                 cohort_properties,
                 group_type_mapping,
             )
+            e.reason = _pick_unresolved_reason(inconclusive_reason, e.reason)
             raise
         except InconclusiveMatchError as e:
             # Evaluation error (bad regex, invalid date, missing property, etc.)
@@ -795,6 +796,22 @@ def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
     return enrollment is True or enrollment == "true"
 
 
+# Filter types matched against the person or group properties the caller passes. Cohort
+# and flag filters have their own matching. Any other type, such as "person_metadata"
+# (a value /flags reads from the persons table, not from person properties), can't be
+# evaluated locally: matching it against a caller property with the same key could
+# disagree with /flags. A missing, null, or empty type is a person filter.
+_PROPERTY_FILTER_TYPES = (None, "", "person", "group")
+
+
+def _assert_property_filter_type_supported(prop) -> None:
+    if prop.get("type") not in _PROPERTY_FILTER_TYPES:
+        raise InconclusiveMatchError(
+            f"Can't evaluate a '{prop['type']}' filter on '{prop.get('key')}' locally",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+        )
+
+
 def _match_condition_filter(
     prop,
     properties,
@@ -829,6 +846,7 @@ def _match_condition_filter(
             device_id=device_id,
             property_matching_version=property_matching_version,
         )
+    _assert_property_filter_type_supported(prop)
     return match_property(prop, properties, property_matching_version)
 
 
@@ -930,6 +948,7 @@ def _raise_condition_errors(feature_flag, server_evaluation_error, inconclusive_
     # Re-raise the original error type: match_feature_flag_properties stops at it
     # and falls back to the server instead of trying later conditions.
     if server_evaluation_error is not None:
+        server_evaluation_error.reason = inconclusive_reason
         raise server_evaluation_error
     if inconclusive_reason is not None:
         raise InconclusiveMatchError(
@@ -1730,9 +1749,10 @@ def match_property_group(
             )
             if effective_match != is_and:
                 decisive_result = effective_match
-        except RequiresServerEvaluation:
+        except RequiresServerEvaluation as e:
             # Static/missing cohorts and malformed definitions always require server evaluation,
             # even when another branch would otherwise resolve the group locally.
+            e.reason = _pick_unresolved_reason(inconclusive_reason, e.reason)
             raise
         except InconclusiveMatchError as e:
             log.debug(f"Failed to compute property {prop} locally: {e}")
@@ -1841,6 +1861,7 @@ def _is_unsupported_property(
         return _is_unsupported_dependency(prop, flags_by_key)
     if property_type != "cohort":
         try:
+            _assert_property_filter_type_supported(prop)
             _assert_filter_supported(prop)
         except InconclusiveMatchError:
             return True
