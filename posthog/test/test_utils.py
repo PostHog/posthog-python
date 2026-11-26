@@ -1038,7 +1038,7 @@ class TestRedisFlagCache(unittest.TestCase):
         assert default_cache.version_key == "posthog:flags:version"
 
     def test_listed_cache_key_is_outside_the_unlisted_prefix(self):
-        for key_prefix in ("test:flags:", "test_flags_", "x"):
+        for key_prefix in ("test:flags:", "test_flags_", "x", "_", "_flags:"):
             cache = utils.RedisFlagCache(self.redis, key_prefix=key_prefix)
             listed_key = cache._get_cache_key("user", "beta", "digest")
             assert not listed_key.startswith(key_prefix)
