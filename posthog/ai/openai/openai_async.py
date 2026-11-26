@@ -258,7 +258,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             model_from_response=state.model,
             stop_reason=state.stop_reason,
             service_tier=state.service_tier,
-            error=error,
+            error=error if error is not None else state.failure,
             options=options,
         )
         capture_streaming_event(self._client._ph_client, event_data)

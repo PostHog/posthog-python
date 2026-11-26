@@ -1,4 +1,9 @@
-"""Run a synthetic offline evaluation, with explicit scorer setup and durable replay."""
+"""Run a synthetic offline evaluation, with explicit scorer setup and durable replay.
+
+Set POSTHOG_SECRET_KEY to a project secret API key or a personal API key.
+Uploads need offline_evaluation_ingestion:write. Looking up a scorer needs
+llm_analytics:read and --create-scorer needs llm_analytics:write.
+"""
 
 import argparse
 import json

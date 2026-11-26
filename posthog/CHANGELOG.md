@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.7 — 2026-11-25
+
+### Patch changes
+
+- [71d0e2a4](https://github.com/posthog/posthog-python/commit/71d0e2a4ec578df7eb2c973886fa861fa30f9c34) Record failed OpenAI Responses API stream events as generation errors in the sync and async clients. The original event still reaches the caller, and privacy mode preserves safe provider error codes while redacting the error message. — Thanks @Artyfowl1710 for your first contribution 🎉!
+
 ## 8.2.6 — 2026-11-25
 
 ### Patch changes
