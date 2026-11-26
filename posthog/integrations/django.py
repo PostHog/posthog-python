@@ -31,6 +31,15 @@ if TYPE_CHECKING:
 class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
+    Place this after ``AuthenticationMiddleware`` in Django's ``MIDDLEWARE`` list so
+    authenticated ``request.user`` identity and email are available. For Django REST
+    Framework handled API exceptions, also configure ``posthog.integrations.drf.exception_handler``.
+
+    This middleware reads ``request.user`` before your view runs. On login or signup
+    requests where ``django.contrib.auth.login()`` runs inside the view, call
+    ``identify_context(str(user.pk))`` (or use ``user_logged_in``) so later events in
+    that request link to the authenticated user.
+
     This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
     - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
     - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`, falling back to the authenticated request user ID)

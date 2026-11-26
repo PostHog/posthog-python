@@ -173,9 +173,9 @@ Name | Type | Description | Default
 `secret_key` |  | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. For example, `posthog.Client(project_api_key, secret_key="phx_...")`. | `None`
 `personal_api_key` |  | Deprecated alias for `secret_key`. Still honored for backwards compatibility; prefer `secret_key`, which also accepts a Project Secret API Key. | `None`
 `disabled` |  | If True, disable captures and API requests. Useful in tests. | `False`
-`disable_geoip` |  | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. | `True`
+`disable_geoip` |  | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. Set `$ip` in event properties to geolocate from a client IP. | `True`
 `is_server` |  | Whether events are emitted from a server-side runtime. Defaults to True; set to False when using the SDK as a client/CLI so the device OS is attributed to the person normally. Events get `$is_server` only when the event, context tags and `super_properties` leave it unset. | `True`
-`historical_migration` |  | Mark events as historical migration imports. | `False`
+`historical_migration` |  | Mark events as historical migration imports. Pass past `timestamp` values on those `capture()` calls. | `False`
 `feature_flags_request_timeout_seconds` | `float` | Timeout in seconds for feature flag and remote config requests. | `3`
 `feature_flags_request_max_retries` |  | Number of retries for feature flag requests after network, transport, or timeout failures. Defaults to 1. Set to 0 to disable retries. | `1`
 `app_host` | `Optional[str]` | Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. | `None`
@@ -189,10 +189,10 @@ Name | Type | Description | Default
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
 `privacy_mode` |  | For AI observability, capture usage metadata without prompt inputs or outputs. | `False`
 `enable_full_ai_capture` |  | Capture full AI content in PostHog AI wrapper events: skips string truncation and passes media (base64/data URIs) through unredacted. `privacy_mode` always wins. Wrapper events use the AI capture endpoint whether or not this is set. Defaults to False. | `False`
-`before_send` |  | Optional callback that can modify or drop events before upload. Return `None` to drop an event. Context tags, context options, `super_properties`, `super_options` and the values the SDK adds, such as `$is_server`, `$geoip_disable` and `$os`, fill in before it runs, so it can change or remove them. | `None`
+`before_send` |  | Optional callback that can modify or drop events before upload. Return `None` to drop an event. Context tags, context options, `super_properties`, `super_options` and the values the SDK adds, such as `$is_server`, `$geoip_disable` and `$os`, fill in before it runs, so it can change or remove them. If `before_send` raises or returns a non-dict, the SDK logs the error and drops the event. A hook returning a new dict must copy `event["options"]` to preserve capture options. | `None`
 `flag_fallback_cache_url` |  | Optional feature flag fallback cache URL, such as `memory://local/?ttl=300&size=10000` or a Redis URL. | `None`
-`enable_local_evaluation` |  | Whether to poll feature flag definitions for local evaluation when a personal API key is configured. | `True`
-`flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]` | Optional external cache provider for sharing feature flag definitions across workers. | `None`
+`enable_local_evaluation` |  | Whether to poll feature flag definitions for local evaluation when `secret_key` is configured. | `True`
+`flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]` | Optional external cache provider for sharing feature flag definitions across workers (for example Redis) rather than polling in each worker. | `None`
 `capture_exception_code_variables` |  | Capture local variable values on exception stack frames. | `False`
 `capture_trace_context` |  | When OpenTelemetry is installed and a valid span is active at capture time, add its trace and span IDs as `$trace_id` and `$span_id` properties to events captured with `capture()` and `capture_ai()`, so they can be correlated with backend traces. They fill after context tags and `super_properties`, before `before_send`. A `$trace_id` or `$span_id` from the event, a context tag or `super_properties` stops the SDK adding either ID. Exception events (`capture_exception`) always attach these IDs regardless of this setting. Defaults to False. | `False`
 `traces` | `Optional[dict]` | Config dict for distributed tracing. Non-empty string values for `service.name`, `service.version` and `deployment.environment` in `resource_attributes` take precedence over `service_name`, `service_version` and `environment`, respectively. Options include `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. The span dict has `name`, `kind`, `status`, `attributes`, `events`, `start_time_ns`, `end_time_ns`, `trace_id`, `span_id` and `parent_span_id`, and its attributes are plain Python values. The hook runs after `posthogDistinctId` and `sessionId` are attached, so it can scrub them. It must be a regular function. An `async` hook drops every span. In a list of hooks, the first one to return `None` stops the chain. An entry that isn't callable turns tracing off for the client. Past a per-span cap, the earliest attributes and events are kept and the span reports how many were dropped. `posthogDistinctId` and `sessionId` don't count toward the attribute cap and are never dropped. `max_attribute_value_length` also applies to strings nested in lists and dictionaries. All caps are applied again after `before_span_send`. Spans beyond `max_queue_size` are dropped. An invalid value falls back to its default with a warning. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
@@ -229,6 +229,13 @@ capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 
 Captures an event manually. [Learn about capture best practices](https://posthog.com/docs/product-analytics/capture-events)
 
+Events with a `distinct_id` (explicit or from `identify_context()`)
+create or update a person profile. Pass `$set` or `$set_once` inside
+`properties` (or call `set()` / `set_once()`), since Python 8 has no
+`identify()` method. Events without a `distinct_id` send as personless,
+or pass `options={"process_person_profile": False}` for a known
+`distinct_id`.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -249,6 +256,7 @@ Name | Type | Description | Default
 ```python
 # Anonymous event
 posthog.capture('some-anon-event')
+posthog.capture('background-job', distinct_id='user_123', options={'process_person_profile': False})
 ```
 ```python
 # Context usage
@@ -266,7 +274,8 @@ posthog.capture(
     distinct_id="distinct_id_of_the_user",
     properties={
         "login_type": "email",
-        "is_free_trial": "true"
+        "is_free_trial": "true",
+        "$set": {"name": "Max Hedgehog"}
     }
 )
 ```
@@ -285,6 +294,10 @@ set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 
 Set properties on a person profile.
 
+Falls back to `identify_context()` when `distinct_id` is omitted, and
+returns `None` without sending if no distinct ID or properties/tags exist.
+Active context tags fold into `$set` properties.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -294,6 +307,7 @@ Name | Type | Description | Default
 `timestamp` |  | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
 `uuid` |  | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. | 
+`options` |  | Capture options for this event, sent as given. `process_person_profile` defaults to `True`. | 
 
 **Examples:**
 
@@ -302,7 +316,7 @@ Name | Type | Description | Default
 posthog.set(distinct_id='user123', properties={'name': 'Max Hedgehog'})
 ```
 
-Note: This method will not raise exceptions. Errors are logged.
+Note: Errors are logged rather than raised unless `debug=True`.
 
 ### `Client.set_once`
 
@@ -311,6 +325,9 @@ set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```
 
 Set properties on a person profile only if they haven't been set before.
+
+Behaves like `set()`, including context `distinct_id` fallback and tag
+folding into `$set_once`, without overwriting existing person properties.
 
 **Parameters:**
 
@@ -321,6 +338,7 @@ Name | Type | Description | Default
 `timestamp` |  | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
 `uuid` |  | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. | 
+`options` |  | Capture options for this event, sent as given. `process_person_profile` defaults to `True`. | 
 
 **Examples:**
 
@@ -328,7 +346,7 @@ Name | Type | Description | Default
 posthog.set_once(distinct_id='user123', properties={'initial_signup_date': '2024-01-01'})
 ```
 
-Note: This method will not raise exceptions. Errors are logged.
+Note: Errors are logged rather than raised unless `debug=True`.
 
 ## Traces
 
@@ -405,6 +423,8 @@ alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Uni
 
 Create an alias between two distinct IDs.
 
+Never alias users to a shared placeholder ID such as `"anonymous"`.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -422,7 +442,7 @@ Name | Type | Description | Default
 posthog.alias(previous_id='distinct_id', distinct_id='alias_id')
 ```
 
-Note: This method will not raise exceptions. Errors are logged.
+Note: Errors are logged rather than raised unless `debug=True`.
 
 ## Capture AI
 
@@ -435,7 +455,9 @@ capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 Capture an AI event on the dedicated AI capture endpoint.
 
 Beta: the signature is stable; operational limits (per-event size
-cap, batching, endpoint) may change without notice.
+cap, batching, endpoint) may change without notice. For OpenAI,
+Anthropic, Gemini, LangChain, and OpenTelemetry, prefer the
+`posthog.ai` wrappers over building `$ai_*` payloads by hand.
 
 Takes the same arguments and returns the same value as `capture()`:
 the event UUID, or None when the event was not admitted (disabled
@@ -452,7 +474,13 @@ is sent as given — no redaction or truncation is applied here.
 capture_exception(exception: Optional[ExceptionArg], *, level: Optional[str] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 ```
 
-Capture an exception for error tracking.
+Capture an exception for error tracking. Never raises, even when `debug=True`.
+
+Duplicate calls on the same exception instance send only one event. Contexts
+autocapture only uncaught exceptions escaping `new_context()`, so call
+`capture_exception()` manually when catching and swallowing an error.
+Passing `None` reads `sys.exc_info()`. Returns the event UUID, or `None`
+if skipped or dropped.
 
 When OpenTelemetry is installed and a valid span is active, its trace and
 span IDs are added as `$trace_id` and `$span_id` event properties,
@@ -462,7 +490,7 @@ unless the event, a context tag or `super_properties` sets either one.
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`exception` | `Optional[ExceptionArg]` | The exception to capture. | *required*
+`exception` | `Optional[ExceptionArg]` | The exception to capture, or `None` to read `sys.exc_info()`. | *required*
 `level` | `Optional[str]` | The `$exception_level`, such as `"warning"` or `"fatal"`. Defaults to `"error"`. An unknown value counts as unset. | `None`
 `distinct_id` |  | The distinct ID of the user. | 
 `properties` |  | A dictionary of additional properties. Reserved exception properties, such as `$exception_list` and `$exception_level`, are ignored. | 
@@ -795,7 +823,11 @@ a single `/flags` request per incoming request.
 
 Local evaluation is transparent: when the poller resolves a flag, the
 snapshot's `$feature_flag_called` events are tagged `locally_evaluated=True`
-and reason `"Evaluated locally"`.
+and reason `"Evaluated locally"`. Pass `flags=flags.only_accessed()` to
+`capture()` to attach only flags read via `is_enabled()` or `get_flag()`
+before that call, or `flags=flags.only([...])` for specific keys.
+`get_flag_payload()` doesn't mark a flag accessed or emit
+`$feature_flag_called`.
 
 **Parameters:**
 
@@ -803,8 +835,8 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `distinct_id` | `Optional[ID_TYPES]` | The user's distinct ID. If `None`, falls back to the context distinct_id. If still unresolvable, returns an empty snapshot. | `None`
 `groups` | `Optional[Mapping[str, Union[str, int]]]` | Mapping of group type to group key. | `None`
-`person_properties` | `Optional[Dict[str, Any]]` | Person properties to use for evaluation. | `None`
-`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type. | `None`
+`person_properties` | `Optional[Dict[str, Any]]` | Person properties for conditions not yet ingested or overridden locally. | `None`
+`group_properties` | `Optional[Dict[str, Dict[str, Any]]]` | Group properties keyed by group type (not group key), e.g. `{"company": {"plan": "enterprise"}}`. | `None`
 `only_evaluate_locally` | `bool` | If True, never fall back to remote evaluation — flags that can't be evaluated locally are omitted from the snapshot and listed with a reason in its `unresolved_flags`. | `False`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup. | `None`
 `flag_keys` | `Optional[List[str]]` | Optional list that scopes local evaluation, the underlying `/flags` request, and the returned snapshot. When omitted or `None`, all flags are evaluated. An empty list returns an empty snapshot without evaluating flags. A requested key absent from loaded local definitions is included in one remote fallback per `evaluate_flags` call unless `only_evaluate_locally` is True. If the server also does not know the key, it is omitted from the snapshot. | `None`
@@ -838,6 +870,10 @@ group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, A
 
 Identify a group and set its properties.
 
+Requires the Group Analytics add-on. Pass `name` in `properties` to set
+the group's display name in PostHog, and pass `groups={group_type: group_key}`
+on `capture()` to link events to the group.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -860,7 +896,7 @@ posthog.group_identify('company', 'company_id_in_your_db', {
 })
 ```
 
-Note: This method will not raise exceptions. Errors are logged.
+Note: Errors are logged rather than raised unless `debug=True`.
 
 ## Is feature enabled
 
@@ -969,6 +1005,10 @@ load_feature_flags()
 
 Load feature flags for local evaluation.
 
+Requires `secret_key`. Fetches definitions synchronously on the calling
+thread, and starts background polling every `poll_interval` seconds when
+`enable_local_evaluation=True`.
+
 **Examples:**
 
 ```python
@@ -987,7 +1027,7 @@ Return feature flag definitions loaded for local evaluation.
 
 Type | Description
 ---- | -----------
- | The currently loaded feature flag definitions, or `None` before local evaluation has loaded definitions.
+- | The currently loaded feature flag definitions, or `None` before local evaluation has loaded definitions.
 
 ## SDK utils
 
@@ -1038,6 +1078,9 @@ scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 
 Decorator that creates a new context for the wrapped function using this client.
 
+Supports sync and `async def` functions, and should sit closest to the
+function when stacking decorators.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -1052,6 +1095,10 @@ tag(name: str, value: Any) -> None
 ```
 
 Add a tag to the current context.
+
+Tags attach as event `properties` (overriding `super_properties`,
+overridden by explicit `properties`). Calling `set()` or `set_once()`
+in the context also folds active tags into `$set` or `$set_once`.
 
 **Parameters:**
 
@@ -1119,6 +1166,11 @@ identify_context(distinct_id: str) -> None
 
 Identify the current context with a distinct ID.
 
+Python 8 has no `identify()` method, so call this inside `new_context()`
+to attribute `capture()`, `capture_exception()`, `evaluate_flags()`, and
+`start_span()` calls to the user. Events outside an identified context
+without an explicit `distinct_id` send as personless.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -1132,6 +1184,9 @@ set_context_session(session_id: str) -> None
 ```
 
 Set the session ID for the current context.
+
+Session IDs must be valid UUIDv7 strings, such as `X-POSTHOG-SESSION-ID`
+forwarded from PostHog JS.
 
 **Parameters:**
 
@@ -1253,7 +1308,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
- | The payload associated with the feature flag, or `None` if the client is disabled, no personal API key is configured, or the request fails. Encrypted payloads are decrypted by PostHog before being returned.
+- | The payload associated with the feature flag, or `None` if the client is disabled, no `secret_key` is configured, or the request fails. Encrypted payloads are decrypted by PostHog before being returned.
 
 <details class="note" open markdown="1">
 <summary>Note</summary>
@@ -1334,6 +1389,15 @@ PosthogContextMiddleware(get_response)
 ```
 
 Middleware to automatically track Django requests.
+
+Place this after `AuthenticationMiddleware` in Django's `MIDDLEWARE` list so
+authenticated `request.user` identity and email are available. For Django REST
+Framework handled API exceptions, also configure `posthog.integrations.drf.exception_handler`.
+
+This middleware reads `request.user` before your view runs. On login or signup
+requests where `django.contrib.auth.login()` runs inside the view, call
+`identify_context(str(user.pk))` (or use `user_logged_in`) so later events in
+that request link to the authenticated user.
 
 This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
 - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
@@ -1545,6 +1609,52 @@ trust_tracing_headers: bool
 ```
 
 Deprecated alias for `capture_tracing_headers`.
+
+### `posthog.integrations.drf.exception_handler`
+
+```python
+exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
+```
+
+Capture handled DRF 5xx exceptions using DRF's default handler.
+
+Keep `PosthogContextMiddleware` enabled alongside this handler for request
+context and unhandled exceptions.
+
+**Examples:**
+
+```python
+# settings.py
+REST_FRAMEWORK = {
+    "EXCEPTION_HANDLER": "posthog.integrations.drf.exception_handler",
+}
+```
+
+### `posthog.integrations.drf.create_exception_handler`
+
+```python
+create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
+```
+
+Create a PostHog-instrumented DRF exception handler.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`handler` | `Optional[Callable[[Exception, Mapping[str, Any]], Any]]` | Handler to delegate to. Defaults to DRF's standard exception handler. Its return value and raised exceptions are preserved. | `None`
+`client` | `Optional[Client]` | Optional PostHog client. Client precedence is this argument, the legacy `POSTHOG_DRF_CLIENT` alias, `POSTHOG_MW_CLIENT`, then the global PostHog client. | `None`
+`capture_exceptions` | `Optional[bool]` | Whether to capture handled DRF exceptions. An explicit value takes precedence over `POSTHOG_MW_CAPTURE_EXCEPTIONS`. A boolean setting is used directly; an explicit `None` setting inherits the effective client's `enable_exception_autocapture`. An omitted or malformed setting preserves the legacy `True` default. | `None`
+`capture_4xx` | `bool` | Also capture handled 4xx responses. Disabled by default to avoid reporting expected API errors. | `False`
+`exception_filter` | `Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]]` | Optional final filter called with `(exception, response, context)`. Returning `False` suppresses capture. | `None`
+
+When `POSTHOG_MW_REQUEST_FILTER` is configured, it is also applied to the
+underlying Django request before capture so handled errors cannot bypass the
+middleware's per-request exclusion.
+
+The delegated handler is called first. A `None` response is never
+captured here because DRF will re-raise that exception, allowing Django's
+middleware to capture it as unhandled.
 
 ### `posthog.integrations.flask.PosthogFlaskIntegration`
 
@@ -1839,13 +1949,14 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `socket_options` | `Optional[SocketOptions]` | A list of `(level, option, value)` tuples accepted by urllib3/`socket.setsockopt()`, or `None` to reset defaults. | *required*
 
-<details class="example" open markdown="1">
-<summary>Example</summary>
+**Examples:**
 
+```python
+import socket
 from posthog import set_socket_options
-set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
 
-</details>
+set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
+```
 
 ### `posthog.request.enable_keep_alive`
 
@@ -1883,6 +1994,24 @@ Needs the `async` extra, `posthog[async]`.
 AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
+Initialize an asyncio-native PostHog client.
+
+Import as `AsyncPosthog` (`from posthog import AsyncPosthog`). Keep one
+client for your app's lifetime (`async with AsyncPosthog(...)` or
+`await shutdown()` on teardown) on a single event loop.
+
+`capture()`, `capture_ai()`, `set()`, `set_once()`, `group_identify()`,
+`alias()`, and `capture_exception()` queue in memory synchronously, so don't
+`await` them (use `await capture_immediate()` or
+`await capture_ai_immediate()` when a handler must wait for delivery).
+`evaluate_flags()`, `get_remote_config_payload()`, `emails`, `flush()`,
+`shutdown()`, and `join()` are awaitable.
+
+`secret_key` authenticates `get_remote_config_payload()` and `emails`, not
+local flag polling. `before_send` and `on_error` accept sync or
+`async def` callbacks, while `start_span` and `sync_mode` exist only on
+sync `Posthog`.
+
 ### `AsyncClient.capture`
 
 ```python
@@ -1890,6 +2019,9 @@ capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 ```
 
 Queue an event without blocking for network delivery.
+
+Do not `await` this method. See `Client.capture` for parameter and
+person-profile rules, or `await capture_immediate()` to wait for delivery.
 
 ### `AsyncClient.capture_immediate`
 
@@ -1905,17 +2037,33 @@ Capture one event and wait until its delivery attempt completes.
 set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```
 
+Queue a `$set` event to overwrite person properties without blocking.
+
+Do not `await` this method. Falls back to `identify_context()`, folds
+active context tags into `$set`, and returns `None` without sending if
+`distinct_id` or properties are missing.
+
 ### `AsyncClient.set_once`
 
 ```python
 set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```
 
+Queue a `$set_once` event to set person properties only if unset.
+
+Do not `await` this method. Behaves like `set()` without overwriting
+existing values.
+
 ### `AsyncClient.alias`
 
 ```python
 alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 ```
+
+Queue a `$create_alias` event linking `previous_id` to `distinct_id`.
+
+Do not `await` this method. Neither ID falls back to `identify_context()`,
+and never alias to a shared placeholder such as `"anonymous"`.
 
 ### `AsyncClient.capture_exception`
 
@@ -1964,6 +2112,11 @@ await client.emails.send(
 async flush(timeout_seconds: Optional[float] = 10) -> None
 ```
 
+Drain queued analytics and AI events while keeping the client reusable.
+
+Await this before a short-lived handler exits rather than calling
+`shutdown()` per request.
+
 ### `AsyncClient.evaluate_flags`
 
 ```python
@@ -1983,17 +2136,29 @@ This client does not evaluate flags locally, so the snapshot's
 group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 ```
 
+Queue a `$groupidentify` event to update group properties (requires Group Analytics).
+
+Do not `await` this method. Pass `name` in `properties` for the UI display
+name, and pass `groups` on `capture()` to link events to the group.
+
 ### `AsyncClient.shutdown`
 
 ```python
 async shutdown() -> None
 ```
 
+Flush queued events, stop async workers, and close HTTP transports.
+
+Await once at app teardown (or exit `async with AsyncPosthog(...)`) and
+don't reuse the client afterward.
+
 ### `AsyncClient.join`
 
 ```python
 async join() -> None
 ```
+
+Alias for `await shutdown()`.
 
 ### `AsyncClient.capture_ai`
 
@@ -2035,12 +2200,18 @@ new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, clie
 
 Create a new context scope that will be active for the duration of the with block.
 
+Contexts use `contextvars`, so state carries across function calls and `await`
+within the current execution flow, while new threads start without context. Child
+contexts inherit parent state and override keys locally without mutating the parent.
+Pass `fresh=True` at request or background-job boundaries to clear inherited state,
+and note that explicit arguments on `capture()` always win over context state.
+
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `fresh` | `bool` | Whether to start with a fresh context (default: False) | `False`
-`capture_exceptions` | `Optional[bool]` | Whether to capture exceptions raised within the context. If omitted, defaults to the relevant client's exception autocapture setting. | `None`
+`capture_exceptions` | `Optional[bool]` | Whether to capture uncaught exceptions escaping the `with` block. If omitted, defaults to the relevant client's exception autocapture setting. | `None`
 `client` | `Optional[Client]` | Optional Posthog client instance to use for this context (default: None) | `None`
 
 **Examples:**
@@ -2085,6 +2256,9 @@ set_context_session(session_id: str)
 
 Set the session ID for the current context.
 
+Session IDs must be valid UUIDv7 strings, such as an `X-POSTHOG-SESSION-ID` header
+forwarded from PostHog JS so backend events link to the matching Session Replay timeline.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -2095,7 +2269,7 @@ Name | Type | Description | Default
 
 ```python
 from posthog import set_context_session
-set_context_session("session_123")
+set_context_session("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")
 ```
 
 ### `posthog.set_context_device_id`
@@ -2752,7 +2926,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
- | The payload associated with the feature flag. If payload is encrypted, the return value will be decrypted
+- | The payload associated with the feature flag. If payload is encrypted, the return value will be decrypted
 
 <details class="note" open markdown="1">
 <summary>Note</summary>
@@ -3547,23 +3721,18 @@ Why local evaluation left a flag without a value.
 
 Reported by `FeatureFlagEvaluations.unresolved_flags`. Inheriting from
 `str` keeps the members directly comparable to their string values. When more
-than one cause applies, the first reason in the order below is reported.
+than one cause applies, the first reason in the order below is reported:
 
-<details class="values" open markdown="1">
-<summary>Values</summary>
-
-EXPERIENCE_CONTINUITY: The flag has experience continuity enabled, which
-    local evaluation never resolves. Change the flag to fix it.
-UNSUPPORTED_DEFINITION: The flag uses something the local evaluator does not
-    support, such as a static cohort, an unknown operator or filter type, a
-    malformed value, a dependency with no loaded definition or a circular
-    dependency. Change the flag or upgrade the SDK to fix it.
-UNRESOLVED_DEPENDENCY: A flag this flag depends on has a loaded definition
-    but was unresolved.
-MISSING_CONTEXT: The call did not pass a property, group property or device
-    id the flag needs, or passed it in an unusable form. Pass it to fix it.
-
-</details>
+- `EXPERIENCE_CONTINUITY`: The flag has experience continuity enabled, which
+  local evaluation never resolves. Change the flag to fix it.
+- `UNSUPPORTED_DEFINITION`: The flag uses something the local evaluator does not
+  support, such as a static cohort, an unknown operator or filter type, a
+  malformed value, a dependency with no loaded definition or a circular
+  dependency. Change the flag or upgrade the SDK to fix it.
+- `UNRESOLVED_DEPENDENCY`: A flag this flag depends on has a loaded definition
+  but was unresolved.
+- `MISSING_CONTEXT`: The call did not pass a property, group property or device
+  id the flag needs, or passed it in an unusable form. Pass it to fix it.
 
 **Attributes:**
 

@@ -1263,8 +1263,7 @@ class Client(object):
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
                 payloads, and decrypted flag payloads. For example,
-                `posthog.Client(project_api_key, secret_key="phx_...")`.
-
+                ``posthog.Client(project_api_key, secret_key="phx_...")``.
             personal_api_key: Deprecated alias for ``secret_key``. Still honored
                 for backwards compatibility; prefer ``secret_key``, which also
                 accepts a Project Secret API Key.
@@ -1272,12 +1271,14 @@ class Client(object):
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True. Events get ``$geoip_disable`` only when the
                 event, context tags and ``super_properties`` leave it unset.
+                Set ``$ip`` in event properties to geolocate from a client IP.
             is_server: Whether events are emitted from a server-side runtime.
                 Defaults to True; set to False when using the SDK as a client/CLI
                 so the device OS is attributed to the person normally. Events
                 get ``$is_server`` only when the event, context tags and
                 ``super_properties`` leave it unset.
             historical_migration: Mark events as historical migration imports.
+                Pass past ``timestamp`` values on those ``capture()`` calls.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
             feature_flags_request_max_retries: Number of retries for feature flag
@@ -1325,13 +1326,17 @@ class Client(object):
                 context options, ``super_properties``, ``super_options`` and
                 the values the SDK adds, such as ``$is_server``,
                 ``$geoip_disable`` and ``$os``, fill in before it runs, so it
-                can change or remove them.
+                can change or remove them. If ``before_send`` raises or returns a
+                non-dict, the SDK logs the error and drops the event. A hook
+                returning a new dict must copy ``event["options"]`` to preserve
+                capture options.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
-                local evaluation when a personal API key is configured.
+                local evaluation when ``secret_key`` is configured.
             flag_definition_cache_provider: Optional external cache provider for
-                sharing feature flag definitions across workers.
+                sharing feature flag definitions across workers (for example
+                Redis) rather than polling in each worker.
             capture_exception_code_variables: Capture local variable values on
                 exception stack frames.
             capture_trace_context: When OpenTelemetry is installed and a valid span is
@@ -1948,6 +1953,9 @@ class Client(object):
         """
         Decorator that creates a new context for the wrapped function using this client.
 
+        Supports sync and ``async def`` functions, and should sit closest to the
+        function when stacking decorators.
+
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
             capture_exceptions: Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting.
@@ -1963,6 +1971,10 @@ class Client(object):
     def tag(self, name: str, value: Any) -> None:
         """
         Add a tag to the current context.
+
+        Tags attach as event ``properties`` (overriding ``super_properties``,
+        overridden by explicit ``properties``). Calling ``set()`` or ``set_once()``
+        in the context also folds active tags into ``$set`` or ``$set_once``.
 
         Args:
             name: The tag key.
@@ -2022,6 +2034,11 @@ class Client(object):
         """
         Identify the current context with a distinct ID.
 
+        Python 8 has no ``identify()`` method, so call this inside ``new_context()``
+        to attribute ``capture()``, ``capture_exception()``, ``evaluate_flags()``, and
+        ``start_span()`` calls to the user. Events outside an identified context
+        without an explicit ``distinct_id`` send as personless.
+
         Args:
             distinct_id: The distinct ID to associate with the current context and its children.
 
@@ -2033,6 +2050,9 @@ class Client(object):
     def set_context_session(self, session_id: str) -> None:
         """
         Set the session ID for the current context.
+
+        Session IDs must be valid UUIDv7 strings, such as ``X-POSTHOG-SESSION-ID``
+        forwarded from PostHog JS.
 
         Args:
             session_id: The session ID to associate with the current context and its children.
@@ -2322,6 +2342,13 @@ class Client(object):
         """
         Captures an event manually. [Learn about capture best practices](https://posthog.com/docs/product-analytics/capture-events)
 
+        Events with a ``distinct_id`` (explicit or from ``identify_context()``)
+        create or update a person profile. Pass ``$set`` or ``$set_once`` inside
+        ``properties`` (or call ``set()`` / ``set_once()``), since Python 8 has no
+        ``identify()`` method. Events without a ``distinct_id`` send as personless,
+        or pass ``options={"process_person_profile": False}`` for a known
+        ``distinct_id``.
+
         Args:
             event: The event name to capture.
             distinct_id: The distinct ID of the user.
@@ -2357,6 +2384,7 @@ class Client(object):
             ```python
             # Anonymous event
             posthog.capture('some-anon-event')
+            posthog.capture('background-job', distinct_id='user_123', options={'process_person_profile': False})
             ```
             ```python
             # Context usage
@@ -2374,7 +2402,8 @@ class Client(object):
                 distinct_id="distinct_id_of_the_user",
                 properties={
                     "login_type": "email",
-                    "is_free_trial": "true"
+                    "is_free_trial": "true",
+                    "$set": {"name": "Max Hedgehog"}
                 }
             )
             ```
@@ -2395,7 +2424,9 @@ class Client(object):
         """Capture an AI event on the dedicated AI capture endpoint.
 
         Beta: the signature is stable; operational limits (per-event size
-        cap, batching, endpoint) may change without notice.
+        cap, batching, endpoint) may change without notice. For OpenAI,
+        Anthropic, Gemini, LangChain, and OpenTelemetry, prefer the
+        ``posthog.ai`` wrappers over building ``$ai_*`` payloads by hand.
 
         Takes the same arguments and returns the same value as `capture()`:
         the event UUID, or None when the event was not admitted (disabled
@@ -2602,6 +2633,10 @@ class Client(object):
         """
         Set properties on a person profile.
 
+        Falls back to ``identify_context()`` when ``distinct_id`` is omitted, and
+        returns ``None`` without sending if no distinct ID or properties/tags exist.
+        Active context tags fold into ``$set`` properties.
+
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set.
@@ -2611,6 +2646,8 @@ class Client(object):
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
+            options: Capture options for this event, sent as given.
+                ``process_person_profile`` defaults to ``True``.
 
         Examples:
             ```python
@@ -2621,7 +2658,7 @@ class Client(object):
         Category:
             Identification
 
-        Note: This method will not raise exceptions. Errors are logged.
+        Note: Errors are logged rather than raised unless ``debug=True``.
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
@@ -2656,6 +2693,9 @@ class Client(object):
         """
         Set properties on a person profile only if they haven't been set before.
 
+        Behaves like ``set()``, including context ``distinct_id`` fallback and tag
+        folding into ``$set_once``, without overwriting existing person properties.
+
         Args:
             distinct_id: The distinct ID of the user.
             properties: A dictionary of properties to set once.
@@ -2665,6 +2705,8 @@ class Client(object):
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
+            options: Capture options for this event, sent as given.
+                ``process_person_profile`` defaults to ``True``.
 
         Examples:
             ```python
@@ -2674,7 +2716,7 @@ class Client(object):
         Category:
             Identification
 
-        Note: This method will not raise exceptions. Errors are logged.
+        Note: Errors are logged rather than raised unless ``debug=True``.
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
@@ -2718,6 +2760,10 @@ class Client(object):
         """
         Identify a group and set its properties.
 
+        Requires the Group Analytics add-on. Pass ``name`` in ``properties`` to set
+        the group's display name in PostHog, and pass ``groups={group_type: group_key}``
+        on ``capture()`` to link events to the group.
+
         Args:
             group_type: The type of group (e.g., 'company', 'team'). Required -
                 the call is dropped with a warning if it is missing or empty.
@@ -2747,7 +2793,7 @@ class Client(object):
         Category:
             Identification
 
-        Note: This method will not raise exceptions. Errors are logged.
+        Note: Errors are logged rather than raised unless ``debug=True``.
         """
         if not stringify_id(group_type):
             self.log.warning(
@@ -2800,6 +2846,8 @@ class Client(object):
         """
         Create an alias between two distinct IDs.
 
+        Never alias users to a shared placeholder ID such as ``"anonymous"``.
+
         Args:
             previous_id: The previous distinct ID. Required - the call is dropped
                 with a warning if it is missing or empty.
@@ -2823,7 +2871,7 @@ class Client(object):
         Category:
             Identification
 
-        Note: This method will not raise exceptions. Errors are logged.
+        Note: Errors are logged rather than raised unless ``debug=True``.
         """
         previous_id = stringify_id(previous_id)
         if not previous_id:
@@ -2871,14 +2919,20 @@ class Client(object):
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
         """
-        Capture an exception for error tracking.
+        Capture an exception for error tracking. Never raises, even when ``debug=True``.
+
+        Duplicate calls on the same exception instance send only one event. Contexts
+        autocapture only uncaught exceptions escaping ``new_context()``, so call
+        ``capture_exception()`` manually when catching and swallowing an error.
+        Passing ``None`` reads ``sys.exc_info()``. Returns the event UUID, or ``None``
+        if skipped or dropped.
 
         When OpenTelemetry is installed and a valid span is active, its trace and
         span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
         unless the event, a context tag or ``super_properties`` sets either one.
 
         Args:
-            exception: The exception to capture.
+            exception: The exception to capture, or ``None`` to read ``sys.exc_info()``.
             level: The ``$exception_level``, such as ``"warning"`` or ``"fatal"``.
                 Defaults to ``"error"``. An unknown value counts as unset.
             distinct_id: The distinct ID of the user.
@@ -4533,6 +4587,10 @@ class Client(object):
         """
         Load feature flags for local evaluation.
 
+        Requires ``secret_key``. Fetches definitions synchronously on the calling
+        thread, and starts background polling every ``poll_interval`` seconds when
+        ``enable_local_evaluation=True``.
+
         Examples:
             ```python
             posthog.load_feature_flags()
@@ -5388,7 +5446,7 @@ class Client(object):
 
         Returns:
             The payload associated with the feature flag, or ``None`` if the
-            client is disabled, no personal API key is configured, or the request
+            client is disabled, no ``secret_key`` is configured, or the request
             fails. Encrypted payloads are decrypted by PostHog before being
             returned.
 
@@ -5628,14 +5686,20 @@ class Client(object):
 
         Local evaluation is transparent: when the poller resolves a flag, the
         snapshot's ``$feature_flag_called`` events are tagged ``locally_evaluated=True``
-        and reason ``"Evaluated locally"``.
+        and reason ``"Evaluated locally"``. Pass ``flags=flags.only_accessed()`` to
+        ``capture()`` to attach only flags read via ``is_enabled()`` or ``get_flag()``
+        before that call, or ``flags=flags.only([...])`` for specific keys.
+        ``get_flag_payload()`` doesn't mark a flag accessed or emit
+        ``$feature_flag_called``.
 
         Args:
             distinct_id: The user's distinct ID. If ``None``, falls back to the
                 context distinct_id. If still unresolvable, returns an empty snapshot.
             groups: Mapping of group type to group key.
-            person_properties: Person properties to use for evaluation.
-            group_properties: Group properties keyed by group type.
+            person_properties: Person properties for conditions not yet ingested or
+                overridden locally.
+            group_properties: Group properties keyed by group type (not group key),
+                e.g. ``{"company": {"plan": "enterprise"}}``.
             only_evaluate_locally: If True, never fall back to remote evaluation —
                 flags that can't be evaluated locally are omitted from the snapshot and
                 listed with a reason in its ``unresolved_flags``.

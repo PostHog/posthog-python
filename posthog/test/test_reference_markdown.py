@@ -86,3 +86,15 @@ def test_getting_started_pins_the_install_to_the_page_major(major, pin):
     text = generator.getting_started(major)
     assert f"pip install {pin}" in text
     assert "{major}" not in text and "{next_major}" not in text
+
+
+def test_unannotated_returns_gets_a_placeholder_type(pkg):
+    md = generator.entry(
+        pkg["get_remote_config_payload"], "posthog.get_remote_config_payload"
+    )
+    assert "- | The payload associated" in md
+
+
+def test_drf_helpers_are_in_utils():
+    assert "integrations.drf.exception_handler" in generator.UTILS
+    assert "integrations.drf.create_exception_handler" in generator.UTILS

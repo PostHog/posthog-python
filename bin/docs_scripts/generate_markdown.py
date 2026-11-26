@@ -22,7 +22,8 @@ TYPES = """args.OptionalCaptureArgs feature_flag_evaluations.FeatureFlagEvaluati
 types.FeatureFlag types.FlagsAndPayloads types.UnresolvedFlagReason feature_flags.InconclusiveMatchError
 feature_flags.RequiresServerEvaluation capture_send.CaptureError tracing.span.Span emails.Emails
 emails.EmailError emails.SendEmailResult args.OptionalSetArgs emails.CodeEmailArgs""".split()
-UTILS = """integrations.django.PosthogContextMiddleware integrations.flask.PosthogFlaskIntegration
+UTILS = """integrations.django.PosthogContextMiddleware integrations.drf.exception_handler
+integrations.drf.create_exception_handler integrations.flask.PosthogFlaskIntegration
 integrations.asgi.PosthogASGIMiddleware integrations.celery.PosthogCeleryIntegration
 request.set_socket_options request.enable_keep_alive request.disable_connection_reuse""".split()
 FIRST = ["setup", "capture", "identify"]
@@ -95,6 +96,8 @@ def entry(obj, name: str) -> str:
     md = re.sub(r"<code>(.*?)</code>", r"`\1`", md.replace("<br>", "<br />"))
     # A parameter documented only in the docstring, like a **kwargs key, isn't required.
     md = re.sub(r"^(`\w+` \|  \| .*) \| \*required\*$", r"\1 | ", md, flags=re.M)
+    # An unannotated function's Returns row starts with " | ", which GFM shifts into Type.
+    md = re.sub(r"(Type \| Description\n---- \| -----------\n) \| ", r"\1- | ", md)
     return re.sub(r"^### .*$", f"### `{name}`", md.strip(), count=1, flags=re.M)
 
 

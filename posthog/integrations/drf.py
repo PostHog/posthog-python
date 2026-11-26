@@ -204,7 +204,19 @@ def create_exception_handler(
 
 
 def exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any:
-    """Capture handled DRF 5xx exceptions using DRF's default handler."""
+    """Capture handled DRF 5xx exceptions using DRF's default handler.
+
+    Keep ``PosthogContextMiddleware`` enabled alongside this handler for request
+    context and unhandled exceptions.
+
+    Examples:
+        ```python
+        # settings.py
+        REST_FRAMEWORK = {
+            "EXCEPTION_HANDLER": "posthog.integrations.drf.exception_handler",
+        }
+        ```
+    """
     return _DEFAULT_EXCEPTION_HANDLER(exc, context)
 
 

@@ -110,9 +110,15 @@ def new_context(
     """
     Create a new context scope that will be active for the duration of the with block.
 
+    Contexts use ``contextvars``, so state carries across function calls and ``await``
+    within the current execution flow, while new threads start without context. Child
+    contexts inherit parent state and override keys locally without mutating the parent.
+    Pass ``fresh=True`` at request or background-job boundaries to clear inherited state,
+    and note that explicit arguments on ``capture()`` always win over context state.
+
     Args:
         fresh: Whether to start with a fresh context (default: False)
-        capture_exceptions: Whether to capture exceptions raised within the context. If omitted, defaults to the relevant client's exception autocapture setting.
+        capture_exceptions: Whether to capture uncaught exceptions escaping the ``with`` block. If omitted, defaults to the relevant client's exception autocapture setting.
         client: Optional Posthog client instance to use for this context (default: None)
 
     Examples:
@@ -158,13 +164,16 @@ def set_context_session(session_id: str):
     """
     Set the session ID for the current context.
 
+    Session IDs must be valid UUIDv7 strings, such as an ``X-POSTHOG-SESSION-ID`` header
+    forwarded from PostHog JS so backend events link to the matching Session Replay timeline.
+
     Args:
         session_id: The session ID to associate with the current context and its children
 
     Examples:
         ```python
         from posthog import set_context_session
-        set_context_session("session_123")
+        set_context_session("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")
         ```
 
     Category:
