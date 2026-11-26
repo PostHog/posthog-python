@@ -56,8 +56,9 @@ class _KnownAbsent:
     used for local evaluation.
 
     Only a filter on the listing's own properties reads the key as absent: a
-    ``person`` filter for a person listing, and a ``group`` filter of the same
-    group type for a group listing. A ``group`` filter without a group type reads
+    ``person`` filter (or one without a type) for a person listing, and a
+    ``group`` filter of the same group type for a group listing. A ``group``
+    filter without a group type reads
     the condition's group type, whose properties are the map it is evaluated
     against, at the top level of a condition and in its cohorts alike. Any other
     filter reads the value the listing replaced, as if the key were not listed.
@@ -76,7 +77,11 @@ class _KnownAbsent:
         self.replaced_value = replaced_value
 
     def applies_to(self, prop) -> bool:
-        if prop.get("type") != self.filter_type:
+        filter_type = prop.get("type")
+        if filter_type in (None, ""):
+            # Older definitions omit the type of a person property filter.
+            filter_type = "person"
+        if filter_type != self.filter_type:
             return False
         if self.filter_type == "person":
             return True

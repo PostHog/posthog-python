@@ -328,6 +328,46 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         flag = _flag("flag", [{"key": "id", "value": 5, "type": "cohort"}])
         self.assert_remote(flag, person_property_keys_known_absent=["created_at"])
 
+    @parameterized.expand([("omitted",), ("null",), ("empty",)])
+    def test_listed_key_resolves_an_untyped_person_filter(self, type_state):
+        prop = {"key": "plan", "operator": "is_not_set"}
+        if type_state != "omitted":
+            prop["type"] = None if type_state == "null" else ""
+        self.assert_local(
+            _flag("flag", [prop]),
+            True,
+            person_properties={"plan": "pro"},
+            person_property_keys_known_absent=["plan"],
+        )
+
+    @parameterized.expand([("omitted",), ("null",), ("empty",)])
+    def test_listed_key_resolves_an_untyped_cohort_leaf(self, type_state):
+        leaf = {"key": "plan", "operator": "is_not_set"}
+        if type_state != "omitted":
+            leaf["type"] = None if type_state == "null" else ""
+        self.client.cohorts = {"5": {"type": "AND", "values": [leaf]}}
+        self.assert_local(
+            _flag("flag", [{"key": "id", "value": 5, "type": "cohort"}]),
+            True,
+            person_properties={"plan": "pro"},
+            person_property_keys_known_absent=["plan"],
+        )
+
+    def test_person_listing_does_not_resolve_a_group_filter(self):
+        flag = _flag(
+            "flag",
+            [_group_filter("is_not_set", key="plan")],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            False,
+            groups={"organization": "acme"},
+            group_properties={"organization": {"plan": "pro"}},
+            person_properties={"plan": "pro"},
+            person_property_keys_known_absent=["plan"],
+        )
+
     def test_person_keys_do_not_resolve_a_group_filter_in_a_person_flag(self):
         flag = _flag("flag", [_group_filter("is_not_set", key="tier")])
         self.assert_remote(flag, person_property_keys_known_absent=["tier"])
