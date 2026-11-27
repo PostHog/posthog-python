@@ -2101,13 +2101,20 @@ class Client(object):
         """
         Set the local evaluation feature flags.
         """
-        self._feature_flags = flags or []
+        flags = flags or []
+        self._set_feature_flags(flags, _parse_definitions(flags))
+
+    def _set_feature_flags(
+        self, flags: List[Any], parsed_v2_definitions: Dict[str, _ParsedDefinition]
+    ) -> None:
+        """Install definitions with the config version 2 documents parsed from them."""
+        self._feature_flags = flags
         self.feature_flags_by_key = {
             flag["key"]: flag
             for flag in self._feature_flags
             if flag.get("key") is not None
         }
-        self._parsed_v2_definitions = _parse_definitions(self._feature_flags)
+        self._parsed_v2_definitions = parsed_v2_definitions
         assert self.feature_flags_by_key is not None, (
             "feature_flags_by_key should be initialized when feature_flags is set"
         )
@@ -4222,12 +4229,19 @@ class Client(object):
         data: FlagDefinitionCacheData,
         *,
         _fingerprint: Optional[str] = None,
+        _parsed_v2_definitions: Optional[Dict[str, _ParsedDefinition]] = None,
     ) -> Optional[str]:
-        """Publish definitions and return the old cache identity for unlocked cleanup."""
+        """Publish definitions and return the old cache identity for unlocked cleanup.
+
+        The fingerprint and the parsed config version 2 documents are prepared before
+        taking the publication lock; a caller that already holds it passes both."""
         fingerprint = _fingerprint or self._hash_flag_definitions(data)
+        flags = data["flags"] or []
+        if _parsed_v2_definitions is None:
+            _parsed_v2_definitions = _parse_definitions(flags)
         with self._flag_definition_publication_lock:
             old_fingerprint = self._flag_definition_fingerprint
-            self.feature_flags = data["flags"]
+            self._set_feature_flags(flags, _parsed_v2_definitions)
             self.group_type_mapping = data["group_type_mapping"]
             self.cohorts = data["cohorts"]
             self._property_matching_version = data.get("property_matching_version", 1)
@@ -4438,12 +4452,13 @@ class Client(object):
                 etag=request_etag,
             )
 
-            # Canonical serialization can be expensive; do it before publication.
-            fingerprint = (
-                self._hash_flag_definitions(response.data)
-                if response.data is not None and not response.not_modified
-                else None
-            )
+            # Canonical serialization and parsing can be expensive; do them before
+            # publication.
+            fingerprint: Optional[str] = None
+            parsed_v2_definitions: Optional[Dict[str, _ParsedDefinition]] = None
+            if response.data is not None and not response.not_modified:
+                fingerprint = self._hash_flag_definitions(response.data)
+                parsed_v2_definitions = _parse_definitions(response.data["flags"] or [])
 
             with self._flag_definition_publication_lock:
                 if fetch_generation <= self._flag_definition_published_generation:
@@ -4479,7 +4494,9 @@ class Client(object):
                     return
 
                 old_fingerprint = self._update_flag_state(
-                    response.data, _fingerprint=fingerprint
+                    response.data,
+                    _fingerprint=fingerprint,
+                    _parsed_v2_definitions=parsed_v2_definitions,
                 )
 
                 if self._flag_definition_cache_provider:
