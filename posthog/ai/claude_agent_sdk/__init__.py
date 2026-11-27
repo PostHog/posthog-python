@@ -151,7 +151,7 @@ async def query(
             yield message
         return
 
-    async for message in processor.query(
+    stream = processor.query(
         prompt=prompt,
         options=options,
         transport=transport,
@@ -160,5 +160,11 @@ async def query(
         posthog_privacy_mode=posthog_privacy_mode,
         posthog_groups=posthog_groups,
         posthog_options=posthog_options,
-    ):
-        yield message
+    )
+    try:
+        async for message in stream:
+            yield message
+    finally:
+        # Closing this stream early must also close the processor's, so it
+        # sends the tool spans still waiting for a result.
+        await stream.aclose()

@@ -559,10 +559,12 @@ class TestToolSpanEmission:
 
         spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
         assert len(spans) == 1
-        for key in ("$ai_input_state", "$ai_output_state", "$ai_error"):
+        for key in ("$ai_input_state", "$ai_output_state"):
             assert key not in spans[0]
         if result_arrives:
             assert spans[0]["$ai_is_error"] is True
+            # Privacy mode keeps a fixed label so the span still reads as an error.
+            assert spans[0]["$ai_error"] == "ToolError"
 
     @pytest.mark.asyncio
     async def test_span_carries_tool_error(self, processor, mock_client):
@@ -600,7 +602,7 @@ class TestToolSpanEmission:
         spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
         assert spans[0]["$ai_is_error"] is True
         assert "$ai_latency" in spans[0]
-        assert "$ai_error" not in spans[0]
+        assert spans[0]["$ai_error"] == "ToolError"
         assert "$ai_output_state" not in spans[0]
         assert "$ai_input_state" not in spans[0]
 
@@ -634,6 +636,60 @@ class TestToolSpanEmission:
         spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
         assert len(spans) == 1
         assert "$ai_is_error" not in spans[0]
+
+    @pytest.mark.asyncio
+    async def test_full_capture_disabled_mid_tool_redacts_buffered_input(
+        self, processor, mock_client
+    ):
+        data_url = "data:image/png;base64," + "A" * 3000
+        turn = [
+            _make_message_start(),
+            _make_assistant_message(
+                tool_uses=[{"id": "tu_1", "name": "Look", "input": {"image": data_url}}]
+            ),
+            _make_message_stop(),
+            UserMessage(content=[ToolResultBlock(tool_use_id="tu_1", content="ok")]),
+            _make_result_message(),
+        ]
+        mock_client.enable_full_ai_capture = True
+
+        async def query(messages):
+            for i, msg in enumerate(messages):
+                if i == 3:
+                    # Full capture turns off while the tool runs.
+                    mock_client.enable_full_ai_capture = False
+                yield msg
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: query(turn),
+        ):
+            async for _ in processor.query(prompt="go", options=ClaudeAgentOptions()):
+                pass
+
+        [props] = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert props["$ai_input_state"]["image"] != data_url
+        assert "AAAA" not in props["$ai_input_state"]["image"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("entry_point", ["module_query", "processor_query"])
+    async def test_pending_span_is_sent_when_caller_stops_early(
+        self, mock_client, entry_point
+    ):
+        messages = self._tool_turn(ToolResultBlock(tool_use_id="tu_1", content="ok"))
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            stream = _claude_query(entry_point, mock_client, "user", None)
+            async for message in stream:
+                if isinstance(message, AssistantMessage):
+                    break
+            await stream.aclose()
+
+        [props] = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert props["$ai_span_name"] == "Bash"
+        assert "$ai_is_error" not in props
 
 
 class TestTraceEmission:
@@ -753,6 +809,35 @@ class TestPrivacyMode:
 
         properties = client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] == [{"role": "user", "content": "visible"}]
+
+    @pytest.mark.asyncio
+    async def test_privacy_mode_drops_input_state_passed_in_properties(
+        self, mock_client
+    ):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client, distinct_id="user", privacy_mode=True
+        )
+        messages = TestToolSpanEmission._tool_turn(
+            ToolResultBlock(tool_use_id="tu_1", content="a.txt")
+        )
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(
+                prompt="go",
+                options=ClaudeAgentOptions(),
+                posthog_properties={"$ai_input_state": "secret"},
+            ):
+                pass
+
+        [span] = [
+            c.kwargs["properties"]
+            for c in mock_client.capture_ai.call_args_list
+            if c.kwargs["event"] == "$ai_span"
+        ]
+        assert "$ai_input_state" not in span
 
     @pytest.mark.asyncio
     async def test_privacy_mode_redacts_tool_input(self, mock_client):

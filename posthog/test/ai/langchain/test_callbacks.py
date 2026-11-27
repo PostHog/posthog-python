@@ -1668,7 +1668,7 @@ def test_tool_span_handled_tool_error_respects_privacy_mode(mock_client):
 
     spans = _tool_spans(mock_client)
     assert spans[0]["$ai_is_error"] is True
-    assert spans[0]["$ai_error"] is None
+    assert spans[0]["$ai_error"] == "ToolError"
     assert spans[0]["$ai_output_state"] is None
 
 
