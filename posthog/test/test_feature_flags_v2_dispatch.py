@@ -1301,6 +1301,108 @@ def test_the_cache_keeps_the_identity_of_the_definitions(keys):
         reader.shutdown()
 
 
+class _SharedProvider(_Provider):
+    """A cache that other processes also write. This client fetches only while
+    ``fetch`` is set, and otherwise reads what was stored last."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fetch = True
+
+    def should_fetch_flag_definitions(self) -> bool:
+        return self.fetch
+
+    def on_flag_definitions_received(self, data: Dict[str, Any]) -> None:
+        super().on_flag_definitions_received(data)
+        self.stored = self.received[-1]
+
+
+def _v2_feed_service(flags: List[Dict[str, Any]]):
+    """The definitions service with an unchanged v=2 feed: 304 for its ETag."""
+
+    def get(*args: Any, etag: Optional[str] = None, **kwargs: Any) -> GetResponse:
+        if etag == '"feed-v2"':
+            return GetResponse(data=None, etag=etag, not_modified=True)
+        return GetResponse(
+            data={
+                "flags": copy.deepcopy(flags),
+                "group_type_mapping": {},
+                "cohorts": {},
+            },
+            etag='"feed-v2"',
+        )
+
+    return get
+
+
+def test_definitions_from_the_cache_do_not_keep_the_etag_of_other_definitions():
+    # A release that does not ask for v=2 writes the legacy feed, without config
+    # version 2 flags, to the shared cache. The ETag of the v=2 feed does not describe
+    # those definitions, so a 304 for it must not keep them.
+    legacy = _v1_definition("legacy-shelf")
+    provider = _SharedProvider()
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        secret_key="secret-key",
+        flag_definition_cache_provider=provider,
+    )
+    try:
+        with mock.patch(
+            "posthog.client.get", side_effect=_v2_feed_service([legacy, BOOLEAN])
+        ) as get:
+            client._load_feature_flags()
+            provider.stored = {
+                "flags": [legacy],
+                "group_type_mapping": {},
+                "cohorts": {},
+            }
+            provider.fetch = False
+            client._load_feature_flags()
+            assert "reading-mode" not in (client.feature_flags_by_key or {})
+            provider.fetch = True
+            client._load_feature_flags()
+
+        assert [request.kwargs["etag"] for request in get.call_args_list] == [
+            None,
+            None,
+        ]
+        assert "reading-mode" in (client.feature_flags_by_key or {})
+        # The cache gets the whole feed back for the other readers.
+        assert provider.stored is not None and provider.stored["flags_v2"] == [BOOLEAN]
+    finally:
+        client.shutdown()
+
+
+def test_the_same_definitions_from_the_cache_keep_the_etag():
+    legacy = _v1_definition("legacy-shelf")
+    provider = _SharedProvider()
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        secret_key="secret-key",
+        flag_definition_cache_provider=provider,
+    )
+    try:
+        with mock.patch(
+            "posthog.client.get", side_effect=_v2_feed_service([legacy, BOOLEAN])
+        ) as get:
+            client._load_feature_flags()
+            provider.fetch = False
+            client._load_feature_flags()
+            provider.fetch = True
+            client._load_feature_flags()
+
+        assert [request.kwargs["etag"] for request in get.call_args_list] == [
+            None,
+            '"feed-v2"',
+        ]
+        assert len(provider.received) == 1
+        assert "reading-mode" in (client.feature_flags_by_key or {})
+    finally:
+        client.shutdown()
+
+
 def test_the_identity_of_version_1_definitions_is_unchanged():
     # Releases without the config version 2 evaluator share a flag cache with this
     # one, so they must give version 1 definitions the same identity.

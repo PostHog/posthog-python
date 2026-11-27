@@ -4222,10 +4222,16 @@ class Client(object):
         data: FlagDefinitionCacheData,
         *,
         _fingerprint: Optional[str] = None,
+        _from_cache: bool = False,
     ) -> Optional[str]:
         """Publish definitions and return the old cache identity for unlocked cleanup."""
         fingerprint = _fingerprint or self._hash_flag_definitions(data)
         with self._flag_definition_publication_lock:
+            if _from_cache and fingerprint != self._flag_definition_fingerprint:
+                # The ETag validates the definitions this client fetched. A 304 for it
+                # would keep other definitions read from the cache, such as the legacy
+                # feed an older release wrote, until the feed changes.
+                self._flags_etag = None
             old_fingerprint = self._flag_definition_fingerprint
             self.feature_flags = data["flags"]
             self.group_type_mapping = data["group_type_mapping"]
@@ -4390,7 +4396,7 @@ class Client(object):
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
                     old_fingerprint = self._update_flag_state(
-                        _with_cached_v2_flags(cached_data)
+                        _with_cached_v2_flags(cached_data), _from_cache=True
                     )
                     self._warn_unresolvable_flags()
                     if isinstance(self.flag_cache, RedisFlagCache):
