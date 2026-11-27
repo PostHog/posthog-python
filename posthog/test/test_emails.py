@@ -16,7 +16,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from ipaddress import ip_address
 from pathlib import Path
@@ -31,14 +30,7 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import (
-    TRANSACTIONAL_CATEGORY,
-    AsyncEmails,
-    EmailError,
-    Emails,
-    EmailStatus,
-    MessageCategory,
-)
+from posthog.emails import AsyncEmails, EmailError, Emails, EmailStatus
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
@@ -669,6 +661,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
                 "capture_engagement": False,
+                "category": "newsletter",
                 "distinct_id": "user_123",
             },
             {
@@ -677,6 +670,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
                 "capture_engagement": False,
+                "category": "newsletter",
                 "distinct_id": "user_123",
             },
         ),
@@ -698,6 +692,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
+                "category": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -843,228 +838,6 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
     }
 
 
-MARKETING_HTML = "<p>News. <a href='{{ unsubscribe_url }}'>Unsubscribe</a></p>"
-NEWSLETTER = MessageCategory(
-    key="newsletter",
-    type="marketing",
-    name="Newsletter",
-    description="Monthly product news",
-)
-
-
-class _CategoryKind(str, Enum):
-    MARKETING = "marketing"
-    TRANSACTIONAL = "transactional"
-
-
-@parameterized.expand(
-    [
-        ("omitted", {}, {}),
-        ("none_as_left_out", {"category": None}, {}),
-        (
-            "built_in_transactional",
-            {"category": TRANSACTIONAL_CATEGORY},
-            {"category": "transactional"},
-        ),
-        (
-            "str_enum_transactional",
-            {"category": _CategoryKind.TRANSACTIONAL},
-            {"category": "transactional"},
-        ),
-        (
-            "str_enum_category_type",
-            {
-                "html": MARKETING_HTML,
-                "category": MessageCategory(
-                    key="newsletter",
-                    type=_CategoryKind.MARKETING,
-                    name="Newsletter",
-                ),
-            },
-            {
-                "html": MARKETING_HTML,
-                "category": {
-                    "key": "newsletter",
-                    "type": "marketing",
-                    "name": "Newsletter",
-                },
-            },
-        ),
-        (
-            "category_without_description",
-            {
-                "category": MessageCategory(
-                    key="receipts", type="transactional", name="Receipts"
-                )
-            },
-            {
-                "category": {
-                    "key": "receipts",
-                    "type": "transactional",
-                    "name": "Receipts",
-                }
-            },
-        ),
-        (
-            "category_with_empty_description",
-            {
-                "html": MARKETING_HTML,
-                "category": MessageCategory(
-                    key="newsletter",
-                    type="marketing",
-                    name="Newsletter",
-                    description="",
-                ),
-            },
-            {
-                "html": MARKETING_HTML,
-                "category": {
-                    "key": "newsletter",
-                    "type": "marketing",
-                    "name": "Newsletter",
-                    "description": "",
-                },
-            },
-        ),
-        (
-            "category_with_description",
-            {"html": MARKETING_HTML, "category": NEWSLETTER},
-            {
-                "html": MARKETING_HTML,
-                "category": {
-                    "key": "newsletter",
-                    "type": "marketing",
-                    "name": "Newsletter",
-                    "description": "Monthly product news",
-                },
-            },
-        ),
-    ]
-)
-def test_code_send_serializes_category_on_the_send_route(_name, overrides, extra_body):
-    emails, adapter = emails_with([accepted("msg_1")])
-
-    result = send_code(emails, **{"html": HTML, **overrides})
-
-    assert result.id == "msg_1"
-    [request] = adapter.requests
-    assert (request.method, request.url) == ("POST", SEND_URL)
-    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
-    assert json.loads(request.body) == {
-        "to": "user@example.com",
-        "template_key": "password-reset",
-        "subject": "Reset your password",
-        "html": HTML,
-        **extra_body,
-    }
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "category, expected_category",
-    [
-        (
-            NEWSLETTER,
-            {
-                "key": "newsletter",
-                "type": "marketing",
-                "name": "Newsletter",
-                "description": "Monthly product news",
-            },
-        ),
-        (TRANSACTIONAL_CATEGORY, "transactional"),
-    ],
-)
-async def test_async_client_posts_category_on_the_send_route(
-    category, expected_category
-):
-    seen: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return httpx.Response(202, json={"message_id": "msg_1", "replayed": False})
-
-    async with AsyncEmails(
-        SECRET_KEY,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-    ) as emails:
-        result = await emails.send(
-            to="user@example.com",
-            template_key="november-digest",
-            subject="What's new",
-            html=MARKETING_HTML,
-            category=category,
-        )
-
-    assert result.id == "msg_1"
-    [request] = seen
-    assert (request.method, str(request.url)) == ("POST", SEND_URL)
-    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
-    assert json.loads(request.content) == {
-        "to": "user@example.com",
-        "template_key": "november-digest",
-        "subject": "What's new",
-        "html": MARKETING_HTML,
-        "category": expected_category,
-    }
-
-
-@pytest.mark.parametrize(
-    "status, code, attr, overrides",
-    [
-        pytest.param(400, "category_mismatch", "category", {}, id="category_mismatch"),
-        pytest.param(
-            400, "too_many_categories", "category", {}, id="too_many_categories"
-        ),
-        pytest.param(
-            400,
-            "unsubscribe_link_required",
-            None,
-            {"html": "<p>News</p>"},
-            id="unsubscribe_link_required",
-        ),
-        pytest.param(
-            400,
-            "copies_not_allowed",
-            None,
-            {"cc": "copy@example.com"},
-            id="copies_not_allowed",
-        ),
-        pytest.param(400, "marketing_template", None, {}, id="marketing_template"),
-        pytest.param(422, "recipient_opted_out", None, {}, id="recipient_opted_out"),
-    ],
-)
-def test_category_refusals_raise_validation_error_without_retrying(
-    status, code, attr, overrides, no_sleep
-):
-    body = {"type": "invalid_request", "code": code, "detail": "Refused."}
-    if attr is not None:
-        body["attr"] = attr
-    reply = (status, body, {})
-    emails, adapter = emails_with([reply, accepted()], max_retries=2)
-
-    with pytest.raises(EmailError) as raised:
-        send_code(
-            emails, **{"html": MARKETING_HTML, "category": NEWSLETTER, **overrides}
-        )
-
-    assert (
-        raised.value.name,
-        raised.value.code,
-        raised.value.status_code,
-        raised.value.field,
-    ) == ("validation_error", code, status, attr)
-    assert len(adapter.requests) == 1
-
-
-class _CaseInsensitiveStr(str):
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, str) and str(self).lower() == other.lower()
-
-    def __hash__(self) -> int:
-        return hash(str(self).lower())
-
-
 @parameterized.expand(
     [
         ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
@@ -1091,62 +864,6 @@ class _CaseInsensitiveStr(str):
         ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
         ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
         ("bcc_not_text", {"html": HTML, "bcc": [123]}, TypeError),
-        ("category_not_a_category", {"html": HTML, "category": 1}, TypeError),
-        ("category_mock_any", {"html": HTML, "category": mock.ANY}, TypeError),
-        (
-            "category_str_subclass",
-            {"html": HTML, "category": _CaseInsensitiveStr("TRANSACTIONAL")},
-            TypeError,
-        ),
-        (
-            "category_as_a_key",
-            {"html": HTML, "category": "product-updates"},
-            TypeError,
-        ),
-        (
-            "category_type_unknown",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="product-updates", type="promo", name="Product updates"
-                ),
-            },
-            ValueError,
-        ),
-        (
-            "category_type_str_subclass",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="news",
-                    type=_CaseInsensitiveStr("MARKETING"),
-                    name="News",
-                ),
-            },
-            ValueError,
-        ),
-        (
-            "category_type_mock_any",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="news",
-                    type=mock.ANY,
-                    name="News",
-                ),
-            },
-            ValueError,
-        ),
-        (
-            "category_name_not_text",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="product-updates", type="marketing", name=None
-                ),
-            },
-            TypeError,
-        ),
         (
             "template_data_on_code_form",
             {"html": HTML, "template_data": {"first_name": "Jane"}},
@@ -1218,7 +935,7 @@ class _CaseInsensitiveStr(str):
                 "template_id": TEMPLATE_ID,
                 "template_key": None,
                 "subject": None,
-                "category": TRANSACTIONAL_CATEGORY,
+                "category": "newsletter",
             },
             TypeError,
         ),
@@ -1538,8 +1255,6 @@ class FakePostHog:
         self._content_types: dict[str, Optional[str]] = {}
         self.writes = 0
         self.delivered: list[DeliveredEmail] = []
-        self.routes: list[str] = []
-        self.sent_payloads: list[dict[str, Any]] = []
         self.project_can_send_files = True
         self.send_fields = SEND_FIELDS
         self._sent_by_idempotency_key: dict[str, str] = {}
@@ -1569,7 +1284,6 @@ class FakePostHog:
 
     def handle(self, incoming: Incoming) -> Answer:
         route, handler = self._route(incoming)
-        self.routes.append(route)
         faults = self._faults.get(route)
         if faults:
             return faults.pop(0)(incoming, handler)
@@ -1714,7 +1428,6 @@ class FakePostHog:
             refused = self._refused_reference(index, reference)
             if refused is not None:
                 return refused
-        self.sent_payloads.append(payload)
         message_id = str(uuid4())
         self.delivered.append(self._email(message_id, payload, references))
         if idempotency_key:
@@ -1880,156 +1593,6 @@ def test_delivers_cc_and_bcc_beside_the_files():
         ("audit@example.com", "archive@example.com"),
     )
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
-
-
-def test_categorized_transactional_send_uploads_new_attachment_and_posts_category():
-    posthog = FakePostHog()
-    content = b"Receipt PDF bytes"
-    sha256 = hashlib.sha256(content).hexdigest()
-    receipts = MessageCategory(
-        key="receipts",
-        type="transactional",
-        name="Receipts",
-        description="Billing receipts",
-    )
-
-    result = send_code(
-        emails_on(posthog, max_retries=2),
-        html=HTML,
-        category=receipts,
-        attachments=[
-            {
-                "filename": "receipt.pdf",
-                "content": content,
-                "content_type": "application/pdf",
-            }
-        ],
-    )
-
-    [email] = posthog.delivered
-    assert result.id == email.message_id
-    assert result.replayed is False
-    assert posthog.routes == ["uploads", "storage", "send"]
-    assert posthog.writes == 1
-    assert posthog.stored_files == [content]
-    assert email.attachments == (
-        DeliveredFile("receipt.pdf", content, content_type="application/pdf"),
-    )
-    assert posthog.sent_payloads == [
-        {
-            "to": "user@example.com",
-            "template_key": "password-reset",
-            "subject": "Reset your password",
-            "html": HTML,
-            "category": {
-                "key": "receipts",
-                "type": "transactional",
-                "name": "Receipts",
-                "description": "Billing receipts",
-            },
-            "attachments": [
-                {
-                    "sha256": sha256,
-                    "filename": "receipt.pdf",
-                    "content_type": "application/pdf",
-                }
-            ],
-        }
-    ]
-
-
-@pytest.mark.parametrize(
-    "code, attr, detail, why, fix",
-    [
-        pytest.param(
-            "workflow_can_wait",
-            "attachments",
-            (
-                "This email's workflow can hold a send, so PostHog didn't send "
-                "the email with its files."
-            ),
-            (
-                "A step or a sending rate limit in this workflow can hold the "
-                "send, so its files could expire before the email goes out."
-            ),
-            (
-                "Send files through a workflow whose transactional email step "
-                "follows the trigger directly, or send this email without files."
-            ),
-            id="workflow_can_wait",
-        ),
-        pytest.param(
-            "categories_not_enabled",
-            "category",
-            "Message categories for code sends aren't enabled for this project.",
-            None,
-            None,
-            id="categories_not_enabled",
-        ),
-    ],
-)
-def test_marketing_send_with_attachment_surfaces_refusal_without_retrying(
-    code, attr, detail, why, fix, no_sleep
-):
-    posthog = FakePostHog()
-    content = b"Monthly digest guide"
-    sha256 = hashlib.sha256(content).hexdigest()
-    extra: dict[str, Any] = {"attr": attr}
-    if why is not None:
-        extra["why"] = why
-    if fix is not None:
-        extra["fix"] = fix
-    refusal = api_error(400, code, detail, kind="invalid_request", **extra)
-    seen_payloads: list[dict[str, Any]] = []
-
-    def refuse_valid_send(incoming: Incoming, _handle: Handler) -> Answer:
-        assert incoming.is_authorized
-        payload = json_or_none(incoming.body)
-        assert isinstance(payload, dict)
-        assert set(payload) <= posthog.send_fields
-        for index, reference in enumerate(payload.get("attachments", [])):
-            assert posthog._refused_reference(index, reference) is None
-        seen_payloads.append(payload)
-        return refusal
-
-    # Only the first send is refused; a retry would fall through to FakePostHog._send (202).
-    posthog.inject("send", refuse_valid_send)
-
-    with pytest.raises(EmailError) as raised:
-        send_code(
-            emails_on(posthog, max_retries=2),
-            html=MARKETING_HTML,
-            category=NEWSLETTER,
-            attachments=[{"filename": "guide.txt", "content": content}],
-        )
-
-    assert (
-        raised.value.name,
-        raised.value.code,
-        raised.value.status_code,
-        raised.value.field,
-        raised.value.why,
-        raised.value.fix,
-    ) == ("validation_error", code, 400, attr, why, fix)
-    assert posthog.routes == ["uploads", "storage", "send"]
-    assert posthog.writes == 1
-    assert posthog.stored_files == [content]
-    assert posthog.delivered == []
-    assert seen_payloads == [
-        {
-            "to": "user@example.com",
-            "template_key": "password-reset",
-            "subject": "Reset your password",
-            "html": MARKETING_HTML,
-            "category": {
-                "key": "newsletter",
-                "type": "marketing",
-                "name": "Newsletter",
-                "description": "Monthly product news",
-            },
-            "attachments": [{"sha256": sha256, "filename": "guide.txt"}],
-        }
-    ]
 
 
 @parameterized.expand(

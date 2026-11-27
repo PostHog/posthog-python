@@ -15,7 +15,7 @@ import atexit
 
 import posthog
 from posthog import FeatureFlagEvaluations, FlagValue, Posthog
-from posthog.emails import TRANSACTIONAL_CATEGORY, AsyncEmails, Emails, MessageCategory, SendEmailResult
+from posthog.emails import AsyncEmails, Emails, SendEmailResult
 from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
@@ -45,13 +45,12 @@ _ = (flag_value, all_flags, enabled, payload, evaluations, active)
 
 emails = Emails("phs_example")
 template_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_data={"name": "Ada"})
-rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"], capture_engagement=False, category=MessageCategory(key="newsletter", type="marketing", name="Newsletter", description="Monthly product news"), max_retries=0)
-transactional_send: SendEmailResult = emails.send(to="user@example.com", template_key="receipt", subject="Receipt", html="<p>Paid</p>", category=TRANSACTIONAL_CATEGORY)
+rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"], capture_engagement=False, max_retries=0)
 invite_send: SendEmailResult = emails.send(to="user@example.com", template_key="invite", subject="Invite", html="<p>Invite</p>", cc="team@example.com", bcc=["audit@example.com"], attachments=[{"filename": "invite.ics", "content": b"BEGIN:VCALENDAR", "content_type": "text/calendar"}, {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"}])
 tracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking={"clicks": True, "engagement": False})
 untracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking=False)
 not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", template_key="newsletter", subject="News", html="<p>News</p>", sensitive=False)
-_ = (template_send, rendered_send, transactional_send, invite_send, tracked_send, untracked_send, not_sensitive_send)
+_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send)
 
 
 async def async_email_types() -> None:
@@ -100,7 +99,7 @@ PY
 cat > "$tmp/invalid_types.py" <<'PY'
 # pyright: strict
 from posthog.ai.evaluations import BooleanScorerConfig, CategoricalScorerConfig, NumericPassingRule, NumericScorerConfig, OfflineEvaluations
-from posthog.emails import AsyncEmails, Emails, MessageCategory
+from posthog.emails import AsyncEmails, Emails
 
 client = OfflineEvaluations(project_id=123, secret_key="phx_example")
 NumericPassingRule(operator="gt", threshold=0.8)  # expected-type-error
@@ -115,9 +114,6 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", sensitive=False)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", tracking={"open": False})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
-Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", category="newsletter")  # expected-type-error
-MessageCategory(key="newsletter", type="promo", name="Newsletter")  # expected-type-error
-Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", category="transactional")  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": [104, 105]}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": b"hi", "path": "/tmp/a.txt"}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", attachments=[{"filename": "a.txt", "content": b"hi"}])  # expected-type-error
