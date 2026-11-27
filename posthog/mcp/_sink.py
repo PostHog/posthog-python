@@ -13,9 +13,15 @@ the client lifecycle — the host constructs it and calls ``shutdown()``.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
+import contextlib
 import inspect
+import os
+import threading
+import weakref
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from posthog.client import Client
 
@@ -25,6 +31,57 @@ from ._posthog_events import PostHogCaptureEvent, build_posthog_capture_events
 from ._sanitization import sanitize_event
 from ._truncation import truncate_event
 from .types import BeforeSendFn, Event, McpEvent
+
+
+# The client flush running on each client's flush thread, so overlapping
+# analytics.flush() calls share one blocked thread instead of starting their own.
+_client_flushes: "weakref.WeakKeyDictionary[Any, concurrent.futures.Future[None]]" = (
+    weakref.WeakKeyDictionary()
+)
+_client_flushes_lock = threading.Lock()
+
+
+def _forget_client_flushes_after_fork() -> None:
+    global _client_flushes_lock
+    _client_flushes_lock = threading.Lock()
+    _client_flushes.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_forget_client_flushes_after_fork)
+
+
+def _start_client_flush(client: Any) -> "concurrent.futures.Future[None]":
+    done: concurrent.futures.Future[None] = concurrent.futures.Future()
+    # A running future ignores cancel(), so cancelling an await on it can't make
+    # the worker's set_result() raise.
+    done.set_running_or_notify_cancel()
+
+    def run() -> None:
+        try:
+            client.flush()
+            done.set_result(None)
+        except BaseException as err:
+            done.set_exception(err)
+        finally:
+            with _client_flushes_lock:
+                if _client_flushes.get(client) is done:
+                    del _client_flushes[client]
+
+    threading.Thread(target=run, name="posthog-mcp-flush", daemon=True).start()
+    return done
+
+
+def _client_flush_started_after(
+    client: Any, earlier: "Optional[concurrent.futures.Future[None]]"
+) -> "concurrent.futures.Future[None]":
+    with _client_flushes_lock:
+        current = _client_flushes.get(client)
+        if current is not None and current is not earlier and not current.done():
+            return current
+        current = _start_client_flush(client)
+        _client_flushes[client] = current
+        return current
 
 
 @dataclass
@@ -116,3 +173,21 @@ class McpEventSink:
             )
         except Exception as err:
             log(f"Failed to capture PostHog event {full_event.get('id')}: {err}")
+
+    async def flush(self) -> None:
+        # Client.flush() blocks for up to its timeout when ingest stalls, so it runs
+        # on its own thread, never a shared pool. A flush already running when we
+        # were called may have missed our events: wait for it, then join or start
+        # one that began after.
+        try:
+            with _client_flushes_lock:
+                running = _client_flushes.get(self._posthog)
+            if running is not None:
+                # Its failure is logged by the caller that started it.
+                with contextlib.suppress(Exception):
+                    await asyncio.wrap_future(running)
+            await asyncio.wrap_future(
+                _client_flush_started_after(self._posthog, running)
+            )
+        except Exception as err:
+            log(f"Failed to flush PostHog events: {err}")

@@ -373,6 +373,36 @@ class TestPostHogTracingProcessor:
         assert "$ai_reasoning_tokens" not in props
         assert props["$ai_cache_reporting_exclusive"] is False
 
+    def test_response_span_reads_span_usage_without_response(
+        self, processor, mock_client, mock_span
+    ):
+        """With trace_include_sensitive_data=False the Agents SDK leaves
+        span_data.response unset but still records the token usage on
+        span_data.usage."""
+        mock_span.span_data = ResponseSpanData(
+            usage={
+                "requests": 1,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "input_tokens_details": {
+                    "cached_tokens": 60,
+                    "cache_write_tokens": 0,
+                },
+                "output_tokens_details": {"reasoning_tokens": 40},
+            }
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture_ai.call_args[1]["properties"]
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_output_tokens"] == 50
+        assert props["$ai_total_tokens"] == 150
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_cache_reporting_exclusive"] is False
+
     def test_cached_compatible_claude_usage_is_declared_inclusive(self):
         """A Claude model behind an OpenAI-compatible endpoint reports inclusive
         cached tokens. Without an explicit convention, the cost backend infers

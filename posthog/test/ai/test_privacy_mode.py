@@ -242,6 +242,140 @@ def test_mcp_tool_credentials_are_masked_without_mutating_caller_tools(
     assert mcp_object.headers == {"X-Api-Key": CANARY}
 
 
+@pytest.mark.parametrize(
+    "tool",
+    [
+        pytest.param(
+            {
+                "retrieval": {
+                    "external_api": {
+                        "api_spec": "ELASTIC_SEARCH",
+                        "endpoint": "https://es.example.com",
+                        "api_auth": {"api_key_config": {"api_key_string": CANARY}},
+                    }
+                }
+            },
+            id="retrieval-api-auth",
+        ),
+        pytest.param(
+            {
+                "retrieval": {
+                    "external_api": {
+                        "endpoint": "https://es.example.com",
+                        "auth_config": {"oauth_config": {"access_token": CANARY}},
+                    }
+                }
+            },
+            id="retrieval-auth-config",
+        ),
+        pytest.param(
+            {"google_maps": {"auth_config": {"api_key": CANARY}}},
+            id="google-maps-auth-config",
+        ),
+        pytest.param(
+            {"googleMaps": {"authConfig": {"oauthConfig": {"accessToken": CANARY}}}},
+            id="camel-case-google-maps",
+        ),
+        pytest.param(
+            {"exa_ai_search": {"api_key": CANARY}},
+            id="exa-ai-search-api-key",
+        ),
+        pytest.param(
+            {"parallel_ai_search": {"api_key": CANARY}},
+            id="parallel-ai-search-api-key",
+        ),
+        pytest.param(
+            {
+                "mcp_servers": [
+                    {
+                        "name": "docs",
+                        "streamable_http_transport": {
+                            "url": "https://mcp.example.com",
+                            "headers": {"Authorization": f"Bearer {CANARY}"},
+                        },
+                    }
+                ]
+            },
+            id="mcp-servers-headers",
+        ),
+    ],
+)
+@pytest.mark.parametrize("as_model", [True, False], ids=["model", "dict"])
+def test_gemini_tool_credentials_are_masked(
+    tool: Dict[str, Any], as_model: bool
+) -> None:
+    from google.genai import types
+
+    function_tool = types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="call_api",
+                parameters_json_schema={
+                    "type": "object",
+                    "properties": {"api_key": {"type": "string"}},
+                },
+            )
+        ]
+    )
+    credential_tool = types.Tool.model_validate(tool) if as_model else tool
+    tools = [credential_tool, function_tool]
+
+    captured = extract_available_tool_calls(
+        "gemini", {"config": SimpleNamespace(tools=tools)}
+    )
+
+    assert CANARY not in json.dumps(captured, default=str)
+    assert _REDACTED_MCP_CREDENTIAL in json.dumps(captured, default=str)
+    assert captured[0].keys() & {"google_maps", "googleMaps", *tool}
+    assert captured[1] is function_tool
+    assert CANARY in json.dumps(tool)
+
+
+@pytest.mark.parametrize(
+    "make_tool",
+    [
+        pytest.param(
+            lambda types: {"exa_ai_search": {"api_key": CANARY}, "label": "search"},
+            id="extra-key",
+        ),
+        pytest.param(
+            lambda types: {
+                "google_maps": types.GoogleMaps(
+                    auth_config=types.AuthConfig(api_key=CANARY)
+                )
+            },
+            id="nested-model",
+        ),
+        pytest.param(
+            lambda types: {
+                "mcp_servers": (
+                    {
+                        "streamable_http_transport": {
+                            "headers": {"Authorization": CANARY}
+                        }
+                    },
+                )
+            },
+            id="tuple",
+        ),
+        pytest.param(
+            lambda types: type("AppTool", (types.Tool,), {})(
+                exa_ai_search=types.ToolExaAiSearch(api_key=CANARY)
+            ),
+            id="tool-subclass",
+        ),
+    ],
+)
+def test_gemini_tool_variants_are_masked(make_tool: Callable[[Any], Any]) -> None:
+    from google.genai import types
+
+    captured = extract_available_tool_calls(
+        "gemini", {"config": SimpleNamespace(tools=[make_tool(types)])}
+    )
+
+    assert CANARY not in json.dumps(captured, default=str)
+
+
 @pytest.fixture
 def private_client() -> Iterator[Client]:
     client = Client(
@@ -764,6 +898,48 @@ def test_otel_masks_mcp_credentials_without_privacy_mode(
         **_REDACTED_MCP_OTEL_TOOL_ATTRIBUTES,
         "llm.tools.1.tool.json_schema": f"not json {CANARY}",
     }
+
+
+@pytest.mark.parametrize("privacy_mode", [True, False])
+def test_otel_redacted_span_keeps_counts_dropped_by_span_limits(
+    privacy_mode: bool,
+) -> None:
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+    from opentelemetry.trace import Link
+
+    from posthog.ai.otel import PostHogTraceExporter
+
+    tracer = TracerProvider(
+        span_limits=SpanLimits(max_attributes=2, max_events=1, max_links=1)
+    ).get_tracer("test")
+    linked = [Link(tracer.start_span("linked").get_span_context()) for _ in range(3)]
+    # The limit evicts the oldest attributes, so the MCP tools go last to survive it.
+    span = tracer.start_span(
+        "gen_ai.chat",
+        attributes={
+            "gen_ai.input.messages": "user prompt",
+            "gen_ai.request.model": "gpt-4o",
+            "ai.prompt.tools": json.dumps(_MCP_OTEL_TOOL),
+        },
+        links=linked,
+    )
+    span.add_event("first")
+    # Privacy mode keeps exception events, and opentelemetry-sdk < 1.22 reports 0
+    # dropped events for a span left with none.
+    span.record_exception(ValueError(CANARY))
+    span.end()
+
+    with patch("posthog.ai.otel.exporter.OTLPSpanExporter") as otlp:
+        PostHogTraceExporter(api_key="phc_test", privacy_mode=privacy_mode).export(
+            [span]
+        )
+
+    [[exported]] = otlp.return_value.export.call_args.args
+    assert exported is not span
+    assert exported.dropped_attributes == 1
+    assert exported.dropped_events == 1
+    assert exported.dropped_links == 2
 
 
 @pytest.mark.parametrize("privacy_mode", [True, False])

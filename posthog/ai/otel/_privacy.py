@@ -278,14 +278,19 @@ def _without_content_span(span: ReadableSpan) -> ReadableSpan:
             if event.name == _EXCEPTION_EVENT_NAME
         ],
     )
+    attributes = _without_content(span.attributes)
+    links = BoundedList.from_seq(None, span.links)
+    attributes.dropped = span.dropped_attributes
+    events.dropped = span.dropped_events
+    links.dropped = span.dropped_links
     return ReadableSpan(
         name=span.name,
         context=span.get_span_context(),
         parent=span.parent,
         resource=span.resource,
-        attributes=_without_content(span.attributes),
+        attributes=attributes,
         events=events,
-        links=BoundedList.from_seq(None, span.links),
+        links=links,
         kind=span.kind,
         status=Status(span.status.status_code),
         start_time=span.start_time,
@@ -309,14 +314,20 @@ def _without_mcp_credentials_span(span: ReadableSpan) -> ReadableSpan:
         redacted[key] is attributes[key] for key in attributes
     ):
         return span
+    redacted_attributes = BoundedAttributes(attributes=redacted)
+    events = BoundedList.from_seq(None, span.events)
+    links = BoundedList.from_seq(None, span.links)
+    redacted_attributes.dropped = span.dropped_attributes
+    events.dropped = span.dropped_events
+    links.dropped = span.dropped_links
     return ReadableSpan(
         name=span.name,
         context=span.get_span_context(),
         parent=span.parent,
         resource=span.resource,
-        attributes=BoundedAttributes(attributes=redacted),
-        events=BoundedList.from_seq(None, span.events),
-        links=BoundedList.from_seq(None, span.links),
+        attributes=redacted_attributes,
+        events=events,
+        links=links,
         kind=span.kind,
         status=span.status,
         start_time=span.start_time,

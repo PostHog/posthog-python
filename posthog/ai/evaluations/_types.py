@@ -39,6 +39,8 @@ class ExperimentOptions(TypedDict, total=False):
     UUID and start time are generated once if omitted. ``run_source`` defaults
     to unspecified. Expected counts include every outcome status. Dataset and
     application identifiers describe the original execution, not upload time.
+    An explicit experiment_scorer_version_id overrides the suite's default.
+    Omit it or pass None to let the server resolve the default at creation.
     """
 
     id: str | UUID
@@ -47,6 +49,7 @@ class ExperimentOptions(TypedDict, total=False):
     expected_item_count: int | None
     expected_result_count: int | None
     suite_key: str | None
+    experiment_scorer_version_id: str | UUID | None
     dataset_source: str | None
     dataset_identifier: str | None
     dataset_revision_identifier: str | None
