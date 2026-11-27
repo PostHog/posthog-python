@@ -726,3 +726,30 @@ async def test_schema_lookup_on_fastmcp_2_runs_no_request_middleware_and_trusts_
 
     assert schema is None
     assert listings == []
+
+
+async def test_jlowin_call_drops_description_and_category_a_later_listing_removed():
+    server = FastMCP("jlowin-probe")
+
+    @server.tool(meta={"category": "Math"})
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    client = FakeClient()
+    instrument(server, client)
+    await _list(server)
+
+    # The server stops advertising a description and a category for the tool.
+    tool = await server.get_tool("add")
+    tool.description = None
+    tool.meta = None
+    await _list(server)
+
+    out = await _call(server, "add", {"a": 1, "b": 2, "context": "sum"})
+    await _flush()
+
+    assert out.root.isError is False
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert "$mcp_tool_description" not in props
+    assert "$mcp_tool_category" not in props

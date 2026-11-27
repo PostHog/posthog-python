@@ -1,5 +1,6 @@
 """Unit tests for branch-heavy internal helpers: intent resolution, conversation_id
-schema/loop-back, session-id rollover, and the identity cache. These complement the
+schema/loop-back, session-id rollover, the identity cache, and the tool metadata
+cache that ``tools/list`` fills. These complement the
 end-to-end adapter tests by exercising edge branches directly."""
 
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from posthog.mcp._conversation_id import (
 from posthog.mcp._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
+    collect_listed_tools,
     enabled_virtual_tool_names,
     is_first_listing_page,
     mutate_tool_schema,
@@ -430,3 +432,100 @@ def test_identity_cache_evicts_least_recently_used():
 )
 def test_tools_list_envelope(result, expected):
     assert tools_list_envelope(result) == expected
+
+
+# --- tool metadata cache -----------------------------------------------------
+# What a tools/list caches for $mcp_tool_call. A listing that no longer serves a
+# description or a `_meta.category` must clear what an earlier listing cached.
+# Duck-typed on `.name`, `.description` and `.meta`, so these run under both MCP
+# SDK majors.
+
+
+def _listed_tool(name="search", description="Search docs.", category="Docs"):
+    meta = {"category": category} if category is not None else None
+    return SimpleNamespace(name=name, description=description, meta=meta)
+
+
+def test_listing_caches_description_and_category():
+    data = _data()
+
+    collect_listed_tools(data, [_listed_tool()])
+
+    assert data.tool_descriptions == {"search": "Search docs."}
+    assert data.tool_categories == {"search": "Docs"}
+
+
+def test_a_later_listing_replaces_the_cached_values():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(
+        data, [_listed_tool(description="Find pages.", category="Pages")]
+    )
+
+    assert data.tool_descriptions == {"search": "Find pages."}
+    assert data.tool_categories == {"search": "Pages"}
+
+
+def test_an_empty_description_clears_the_cached_description():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(data, [_listed_tool(description="")])
+
+    assert "search" not in data.tool_descriptions
+
+
+def test_a_missing_description_clears_the_cached_description():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(data, [_listed_tool(description=None)])
+
+    assert "search" not in data.tool_descriptions
+
+
+def test_a_removed_category_clears_the_cached_category():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(data, [_listed_tool(category=None)])
+
+    assert "search" not in data.tool_categories
+
+
+def test_clearing_the_description_keeps_the_category():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(data, [_listed_tool(description="")])
+
+    assert data.tool_descriptions == {}
+    assert data.tool_categories == {"search": "Docs"}
+
+
+def test_clearing_the_category_keeps_the_description():
+    data = _data()
+    collect_listed_tools(data, [_listed_tool()])
+
+    collect_listed_tools(data, [_listed_tool(category=None)])
+
+    assert data.tool_descriptions == {"search": "Search docs."}
+    assert data.tool_categories == {}
+
+
+def test_clearing_a_tool_leaves_the_other_tools_alone():
+    data = _data()
+    collect_listed_tools(
+        data, [_listed_tool(), _listed_tool(name="fetch", description="Fetch.")]
+    )
+
+    collect_listed_tools(
+        data,
+        [
+            _listed_tool(description=""),
+            _listed_tool(name="fetch", description="Fetch."),
+        ],
+    )
+
+    assert data.tool_descriptions == {"fetch": "Fetch."}
