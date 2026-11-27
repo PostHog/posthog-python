@@ -738,6 +738,7 @@ def test_an_object_value_is_returned_as_configured():
         ("not_icontains_multi", ["x", "RO"], "pro", False),
         ("icontains_multi", [], "pro", False),
         ("icontains_multi", [1, True], "plan-1", True),
+        ("starts_with", "pro", "pro\U0001f600", True),
         ("regex", "^nu", None, True),
         ("regex", "", "anything", True),
         # Without a filter value nothing matches, also for is_not.
@@ -855,6 +856,17 @@ def test_a_long_string_that_is_not_a_number_is_read_in_linear_time(
         pytest.param("exact", "pro", _nested(1500), id="exact-nested"),
         pytest.param("icontains", "pro", _nested(1500), id="icontains-nested"),
         pytest.param("semver_eq", "1.2.3", _nested(1500), id="semver-nested"),
+        pytest.param("gt", 5, _nested(1500), id="gt-nested"),
+        pytest.param("is_date_after", "2025-06-15", _nested(1500), id="date-nested"),
+        # A lone surrogate, in a string or an object key, which the flags service
+        # cannot decode.
+        pytest.param("starts_with", "pro", "pro\ud800", id="starts-with-surrogate"),
+        pytest.param("icontains", "pro", ["pro\udc00"], id="icontains-surrogate"),
+        pytest.param("icontains", "pro", {"\ud800": "pro"}, id="key-surrogate"),
+        pytest.param("not_icontains_multi", ["x"], "\ud800", id="multi-surrogate"),
+        pytest.param("semver_eq", "1.2.3", "1.2.3\ud800", id="semver-surrogate"),
+        pytest.param("gt", 5, "6\ud800", id="gt-surrogate"),
+        pytest.param("is_date_after", "2025-06-15", "\ud800", id="date-surrogate"),
     ],
 )
 def test_a_property_value_json_cannot_carry_is_inconclusive(
