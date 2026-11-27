@@ -12,6 +12,7 @@ python -m venv "$tmp/.venv"
 cat > "$tmp/strict_posthog_types.py" <<'PY'
 # pyright: strict
 import atexit
+from datetime import datetime, timezone
 
 import posthog
 from posthog import FeatureFlagEvaluations, FlagValue, Posthog
@@ -50,11 +51,14 @@ invite_send: SendEmailResult = emails.send(to="user@example.com", template_key="
 tracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking={"clicks": True, "engagement": False})
 untracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking=False)
 not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", template_key="newsletter", subject="News", html="<p>News</p>", sensitive=False)
-_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send)
+scheduled_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", scheduled_at=datetime(2026, 12, 1, tzinfo=timezone.utc))
+scheduled_status: str = scheduled_send.status
+scheduled_time: datetime | None = scheduled_send.scheduled_at
+_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send, scheduled_status, scheduled_time)
 
 
 async def async_email_types() -> None:
-    sent: SendEmailResult = await AsyncEmails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>")
+    sent: SendEmailResult = await AsyncEmails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", scheduled_at="2026-12-01T09:00:00Z")
     _ = sent
 
 
@@ -114,6 +118,7 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", sensitive=False)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", tracking={"open": False})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", scheduled_at=1796115600)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": [104, 105]}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": b"hi", "path": "/tmp/a.txt"}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", attachments=[{"filename": "a.txt", "content": b"hi"}])  # expected-type-error
