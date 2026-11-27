@@ -739,6 +739,16 @@ def test_an_object_value_is_returned_as_configured():
         ("icontains_multi", [], "pro", False),
         ("icontains_multi", [1, True], "plan-1", True),
         ("starts_with", "pro", "pro\U0001f600", True),
+        # A filter integer outside 64 bits is read as binary64, as the flags service
+        # reads a flag document. An integer within them is read as itself.
+        ("exact", 10**20, "1e+20", True),
+        ("exact", 10**20, "100000000000000000000", False),
+        ("exact", [-(2**63) - 1], "-9.223372036854776e+18", True),
+        ("icontains_multi", [2**64], "1.8446744073709552e+19", True),
+        ("exact", 2**64 - 1, "18446744073709551615", True),
+        ("exact", -(2**63), "-9223372036854775808", True),
+        ("exact", "18446744073709551615", 2**64 - 1, True),
+        ("exact", "-9223372036854775808", -(2**63), True),
         ("regex", "^nu", None, True),
         ("regex", "", "anything", True),
         # Without a filter value nothing matches, also for is_not.
@@ -852,6 +862,11 @@ def test_a_long_string_that_is_not_a_number_is_read_in_linear_time(
         pytest.param("icontains", "pro", 10**5000, id="icontains-5000-digits"),
         pytest.param("regex", "pro", 10**5000, id="regex-5000-digits"),
         pytest.param("semver_eq", "1.2.3", 10**5000, id="semver-5000-digits"),
+        # An integer outside the 64 bits the flags service reads from a request.
+        pytest.param("exact", "100000000000000000000", 10**20, id="exact-above-u64"),
+        pytest.param("gt", 5, 2**64, id="gt-above-u64"),
+        pytest.param("semver_eq", "1.2.3", 2**64, id="semver-above-u64"),
+        pytest.param("exact", "pro", [-(2**63) - 1], id="exact-below-i64"),
         # Nesting deeper than a JSON reader reads, and than Python recurses.
         pytest.param("exact", "pro", _nested(1500), id="exact-nested"),
         pytest.param("icontains", "pro", _nested(1500), id="icontains-nested"),
