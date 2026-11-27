@@ -1,9 +1,12 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import base64
 import copy
 import json
 import random
 import re
+import time
+import urllib.parse
 from datetime import datetime, timezone
 
 import pytest
@@ -28,7 +31,12 @@ from posthog.capture_event import _to_v1_event
 from posthog.client import Client
 from posthog.mcp._sink import McpCaptureOptions, McpEventSink, process_mcp_event
 from posthog.test.capture_helpers import patch_capture_send, sent_events
-from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
+from posthog.mcp._truncation import (
+    MAX_EVENT_BYTES,
+    normalize,
+    truncate_event,
+    truncate_text,
+)
 from posthog.mcp import McpAnalytics, _NoopAnalytics
 from posthog.mcp._instrumentation import (
     _maybe_emit_initialize,
@@ -196,7 +204,9 @@ def test_json_member_redaction_runs_in_linear_time_on_adversarial_text(value):
 
 # The pattern posthog-go and posthog-rs match JSON members with (with every
 # array item after the first needing its comma), run on Python's re. The SDK's
-# scanner must find exactly its members, only without its quadratic retries.
+# scanner must find exactly its members, only without its quadratic retries. The
+# one addition is the start of a bare value at the end of the text, which a scan
+# cut off mid-array has to read as the array still running.
 _JSON_STRING_ORACLE = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
 _JSON_SCALAR_ORACLE = _JSON_STRING_ORACLE + r"|-?\d[\d.eE+-]*|true|false"
 _JSON_ITEM_ORACLE = r"(?:" + _JSON_SCALAR_ORACLE + r"|null)\s*"
@@ -207,7 +217,7 @@ _JSON_MEMBER_ORACLE = re.compile(
     + _JSON_ITEM_ORACLE
     + r"(?:,\s*"
     + _JSON_ITEM_ORACLE
-    + r")*(?:,\s*)?)?(?:\]|$))"
+    + r")*(?:,\s*)?)?(?:\]|(?:t(?:ru?)?|f(?:a(?:ls?)?)?|n(?:ul?)?|-)?$))"
 )
 
 
@@ -215,7 +225,18 @@ def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
     monkeypatch.setattr(sanitization, "_should_redact_key", lambda key: True)
     rng = random.Random(1223)
     alphabet = ['"', '"', "\\", ":", ",", "[", "]", " ", "\n", "1", "-", "e", "x"]
-    words = ["true", "false", "null", '"k"', '"k": ', "[1, 2]", '\\"']
+    words = [
+        "true",
+        "false",
+        "null",
+        "tru",
+        "fa",
+        "nul",
+        '"k"',
+        '"k": ',
+        "[1, 2]",
+        '\\"',
+    ]
     texts = [
         "".join(rng.choice(alphabet + words) for _ in range(rng.randrange(16)))
         for _ in range(30_000)
@@ -225,6 +246,49 @@ def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
             lambda member: member.group(1) + '"[redacted]"', text
         )
         assert sanitization._redact_json_members(text) == expected, repr(text)
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        pytest.param(["hunter2"] + [True] * 801, id="cut inside true"),
+        pytest.param(["hunter2999"] + [-12] * 900, id="cut after a minus sign"),
+        pytest.param(["hunter2"] + [None] * 801, id="cut inside null"),
+    ],
+)
+def test_a_sensitive_array_stays_redacted_when_the_cuts_end_inside_a_literal(array):
+    text = json.dumps({"token": array}, separators=(",", ":"))
+    for cut in (2048, 3072):
+        assert "hunter2" not in sanitization._redact_json_members(text[:cut])
+    assert "hunter2" not in _captured_intent(text)
+
+
+_PEM_KEY = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "MIIEowIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7M\n"
+    "-----END RSA PRIVATE KEY-----"
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(_PEM_KEY, id="alone"),
+        pytest.param(f"my key is {_PEM_KEY} thanks", id="in prose"),
+        pytest.param(f"{_PEM_KEY[:-30]}", id="without its footer"),
+    ],
+)
+def test_a_pem_private_key_is_redacted_in_free_text(text):
+    captured = sanitize_captured_value(text)
+    assert "MIIEowIBAAKCAQEA" not in captured
+    assert "PRIVATE KEY" not in captured
+
+
+def test_a_pem_private_key_longer_than_the_scan_is_redacted_in_an_intent():
+    pem = "-----BEGIN PRIVATE KEY-----\n" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n" * 150
+    captured = _captured_intent("keep this " + pem + "-----END PRIVATE KEY-----")
+    assert "MIIEvQIBADANBgkq" not in captured
+    assert captured.startswith("keep this ")
 
 
 def test_sanitize_redacts_large_base64():
@@ -883,6 +947,154 @@ def test_sanitize_event_resource_name_keeps_identifiers_and_redacts_uris(
     assert result["resource_name"] == expected
 
 
+def _captured_intent(intent: str) -> str:
+    return truncate_event(sanitize_event({"user_intent": intent}))["user_intent"]
+
+
+def _straddling(identifier: str, cut: int) -> str:
+    """An intent whose start shrinks by about 1500 characters when redacted, with
+    ``identifier`` starting a few characters before the ``cut``-th."""
+    shrinking_start = "see https://h/?token=" + "x" * 1500
+    padding = ("w " * 1000)[: cut - 4 - len(shrinking_start) - 1]
+    return f"{shrinking_start} {padding}{identifier} " + "tail " * 2000
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("1-1." * 250_000, id="separated digits"),
+        pytest.param("lorem ipsum " * 100_000, id="prose"),
+        pytest.param("-----BEGIN PRIVATE KEY ----- " * 50_000, id="pem headers"),
+    ],
+)
+def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
+    started = time.perf_counter()
+    _captured_intent(intent)
+    assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.parametrize("cut", [2048, 3072], ids=["at the limit", "at the margin"])
+@pytest.mark.parametrize(
+    ("identifier", "fragment"),
+    [
+        ("4111 1111 1111 1111", "4111"),
+        ("123 45 6789", "123"),
+        ("(415) 555 0142", "(415)"),
+        ("https://admin:hunter2@db.example.com/x", "hunter2"),
+        ("+44\u00a0 20 7946 0958", "+44"),
+    ],
+)
+def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment, cut):
+    captured = _captured_intent(_straddling(identifier, cut))
+    assert fragment not in captured
+
+
+def _encoded_inner_url() -> str:
+    return urllib.parse.quote("https://admin:" + "p" * 4000 + "@localhost/x", safe="")
+
+
+def _jwt_padded_to(length: int) -> str:
+    """A JWT ``length`` characters long whose payload pads a credential claim with
+    low-entropy filler, so only the known-format pattern, which needs the whole
+    token, recognizes it."""
+
+    def segment(claims: dict) -> str:
+        return (
+            base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        )
+
+    head = segment({"alg": "HS256", "typ": "JWT"})
+    signature = "c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+    filler = "a" * length
+    token = ""
+    while not token or len(token) > length:
+        filler = filler[:-1]
+        payload = segment({"db_password": "hunter2-db", "pad": filler})
+        token = f"{head}.{payload}.{signature}"
+    return token
+
+
+@pytest.mark.parametrize(
+    ("intent", "secret", "kept"),
+    [
+        pytest.param(
+            "Connect with https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Connect with ",
+            id="url password past both cuts",
+        ),
+        pytest.param(
+            "Connect with https://admin:" + "p" * 1500 + "@" + "q" * 2500 + "@db/x",
+            "q" * 32,
+            "Connect with ",
+            id="url password with an @ before the cuts",
+        ),
+        pytest.param(
+            "Open https://h/?next=https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Open ",
+            id="nested url password past both cuts",
+        ),
+        pytest.param(
+            "x " * 775 + _jwt_padded_to(1631) + " tail",
+            "eyJ",
+            "x " * 775,
+            id="jwt whose last separator is past both cuts",
+        ),
+        pytest.param(
+            "Open https://h/?next=" + _encoded_inner_url(),
+            "p" * 32,
+            "Open ",
+            id="encoded nested url password past both cuts",
+        ),
+        pytest.param(
+            "Open https://h/#next=" + _encoded_inner_url(),
+            "p" * 32,
+            "Open ",
+            id="encoded nested url in the fragment",
+        ),
+        pytest.param(
+            "Open https://h/?next=https%3A//admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Open ",
+            id="partly encoded nested scheme",
+        ),
+        pytest.param(
+            "Open https://h/?next=password=hunter2" + "p" * 4000 + ";x=1",
+            "hunter2",
+            "Open ",
+            id="credential field in a value whose semicolon is past both cuts",
+        ),
+    ],
+)
+def test_intent_scan_fails_closed_on_a_credential_unfinished_at_both_cuts(
+    intent, secret, kept
+):
+    captured = _captured_intent(intent)
+    assert secret not in captured
+    assert captured.startswith(kept)
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("s" * 9000, id="one long word"),
+        pytest.param("https://example.com/" + "a" * 9000, id="long url path"),
+        pytest.param("请帮我查询" * 1800, id="long CJK"),
+        pytest.param("请帮我查询" * 900, id="CJK"),
+        pytest.param("item\n" * 1000, id="newline list"),
+        pytest.param("Open /" + "very/long/path/" * 300, id="prose then a long path"),
+    ],
+)
+def test_intent_with_no_word_boundary_keeps_its_start(intent):
+    assert _captured_intent(intent) == truncate_text(intent, 2048)
+
+
+def test_intent_scan_keeps_what_truncation_keeps():
+    intent = "lorem ipsum " * 1000
+    assert _captured_intent(intent) == truncate_text(intent, 2048)
+
+
 def test_sanitize_event_redacts_pii_from_intent():
     event = {
         "user_intent": "Looking up orders for jane.doe@acme.com and calling +1 (415) 555-0142 about a refund.",
@@ -1232,6 +1444,65 @@ def test_build_captured_mcp_parameters_only_strips_sdk_owned_model(
 
     captured = build_captured_mcp_parameters(request, strip_llm_model=strip_llm_model)
     assert captured["request"]["params"]["arguments"].get("llm_model") == expected_model
+
+
+class _CountingDict(dict):
+    """A dict that counts the entries anything reads through ``items()``."""
+
+    reads = 0
+
+    def items(self):
+        for item in super().items():
+            _CountingDict.reads += 1
+            yield item
+
+
+def _nested_counting_dicts(depth: int) -> _CountingDict:
+    nested = _CountingDict(leaf="x")
+    for _ in range(depth - 1):
+        nested = _CountingDict(child=nested)
+    return nested
+
+
+@pytest.mark.parametrize(
+    ("arguments", "max_reads"),
+    [
+        pytest.param(
+            _CountingDict({f"a{i}": i for i in range(10_000)}), 101, id="wide"
+        ),
+        pytest.param({"deep": _nested_counting_dicts(1000)}, 10, id="deep"),
+        pytest.param(
+            {"password": _CountingDict({f"a{i}": i for i in range(10)})},
+            0,
+            id="credential key",
+        ),
+    ],
+)
+def test_captured_parameters_read_only_what_the_limits_keep(arguments, max_reads):
+    _CountingDict.reads = 0
+    build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert _CountingDict.reads <= max_reads
+
+
+def test_captured_parameters_do_not_count_stripped_arguments_toward_the_limit():
+    arguments = {
+        "context": "intent",
+        "conversation_id": "c",
+        **{f"a{i}": i for i in range(100)},
+    }
+    captured = build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert captured["request"]["params"]["arguments"] == {
+        f"a{i}": i for i in range(100)
+    }
+
+
+def test_captured_parameters_redact_a_credential_key_unread():
+    arguments = {"password": {"nested": "hunter2"}, "q": "x"}
+    captured = build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert captured["request"]["params"]["arguments"] == {
+        "password": "[redacted]",
+        "q": "x",
+    }
 
 
 async def test_process_mcp_event_basic():
