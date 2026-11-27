@@ -710,7 +710,8 @@ def get_feature_flag():
 def get_feature_flag_payload():
     """Read a flag's payload with the legacy payload accessor.
 
-    Takes the same evaluation modes as /get_feature_flag; remote by default.
+    Takes only_evaluate_locally and force_remote as /get_feature_flag does, but not
+    allow_remote_fallback; remote by default.
     """
     try:
         if not state.client:
