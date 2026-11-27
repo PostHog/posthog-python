@@ -1455,6 +1455,33 @@ class Emails(_EmailsBase):
             prepared.max_retries,
         )
 
+    def _push_call(
+        self,
+        method: str,
+        path: str,
+        parse: Callable[[int, bytes, Optional[str]], _ResultT],
+        not_done: str,
+        key_needed: str,
+        *,
+        body: Optional[bytes] = None,
+        idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ) -> _ResultT:
+        # posthog.push calls through this, so it gets the same host, key, timeout and retries.
+        finish = self._start(not_done)
+        try:
+            headers = _headers(
+                self._secret_key(key_needed),
+                self.migrated_from,
+                has_body=body is not None,
+                idempotency_key=idempotency_key,
+            )
+            return self._call(
+                self._posthog_request(method, path, body, headers), parse, max_retries
+            )
+        finally:
+            finish()
+
     def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from, has_body=True)
         uploads = self._call(
@@ -1675,6 +1702,33 @@ class AsyncEmails(_EmailsBase):
             _parse_response,
             prepared.max_retries,
         )
+
+    async def _push_call(
+        self,
+        method: str,
+        path: str,
+        parse: Callable[[int, bytes, Optional[str]], _ResultT],
+        not_done: str,
+        key_needed: str,
+        *,
+        body: Optional[bytes] = None,
+        idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ) -> _ResultT:
+        # posthog.push calls through this, so it gets the same host, key, timeout and retries.
+        finish = self._start(not_done)
+        try:
+            headers = _headers(
+                self._secret_key(key_needed),
+                self.migrated_from,
+                has_body=body is not None,
+                idempotency_key=idempotency_key,
+            )
+            return await self._call(
+                self._posthog_request(method, path, body, headers), parse, max_retries
+            )
+        finally:
+            finish()
 
     async def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from, has_body=True)
