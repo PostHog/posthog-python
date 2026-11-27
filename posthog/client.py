@@ -4230,6 +4230,7 @@ class Client(object):
         *,
         _fingerprint: Optional[str] = None,
         _parsed_v2_definitions: Optional[Dict[str, _ParsedDefinition]] = None,
+        _from_cache: bool = False,
     ) -> Optional[str]:
         """Publish definitions and return the old cache identity for unlocked cleanup.
 
@@ -4240,6 +4241,11 @@ class Client(object):
         if _parsed_v2_definitions is None:
             _parsed_v2_definitions = _parse_definitions(flags)
         with self._flag_definition_publication_lock:
+            if _from_cache and fingerprint != self._flag_definition_fingerprint:
+                # The ETag validates the definitions this client fetched. A 304 for it
+                # would keep other definitions read from the cache, such as the legacy
+                # feed an older release wrote, until the feed changes.
+                self._flags_etag = None
             old_fingerprint = self._flag_definition_fingerprint
             self._set_feature_flags(flags, _parsed_v2_definitions)
             self.group_type_mapping = data["group_type_mapping"]
@@ -4404,7 +4410,7 @@ class Client(object):
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
                     old_fingerprint = self._update_flag_state(
-                        _with_cached_v2_flags(cached_data)
+                        _with_cached_v2_flags(cached_data), _from_cache=True
                     )
                     self._warn_unresolvable_flags()
                     if isinstance(self.flag_cache, RedisFlagCache):
@@ -4444,9 +4450,11 @@ class Client(object):
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         old_fingerprint: Optional[str] = None
         try:
+            # v=2 selects the feed with config version 2 definitions. For a project
+            # without them, and on a server that ignores v, the body is the same.
             response = get(
                 personal_api_key,
-                f"/flags/definitions?token={self.api_key}&send_cohorts",
+                f"/flags/definitions?token={self.api_key}&send_cohorts&v=2",
                 self.host,
                 timeout=10,
                 etag=request_etag,
