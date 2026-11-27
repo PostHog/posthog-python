@@ -1582,6 +1582,134 @@ def test_captures_error_without_details_in_span(mock_client):
     assert mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_is_error"]
 
 
+def _tool_spans(mock_client):
+    return [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_span"
+        and call[1]["properties"].get("$ai_span_type") == "tool"
+    ]
+
+
+def _invoke_tool_in_chain(mock_client, tool_to_call, args, privacy_mode=False):
+    # A ToolCall input makes the tool return a ToolMessage.
+    chain = RunnableLambda(
+        lambda x, config: tool_to_call.invoke(
+            {"name": tool_to_call.name, "args": x, "id": "call_1", "type": "tool_call"},
+            config,
+        )
+    )
+    callbacks = [CallbackHandler(mock_client, privacy_mode=privacy_mode)]
+    return chain.invoke(args, config={"callbacks": callbacks})
+
+
+def test_tool_span_has_tool_span_type(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"Sunny in {city}"
+
+    _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_span_name"] == "get_weather"
+    assert "$ai_is_error" not in spans[0]
+    # Only tool runs are typed.
+    other_events = [
+        call[1]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["properties"].get("$ai_span_type") is None
+    ]
+    assert [event["event"] for event in other_events] == ["$ai_trace"]
+
+
+def test_tool_span_marks_handled_tool_error(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException(f"weather service unavailable for {city}")
+
+    get_weather.handle_tool_error = True
+
+    output = _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+    assert output.status == "error"
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "weather service unavailable for Paris"
+    # The chain that returns the error ToolMessage didn't fail itself.
+    trace = [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_trace"
+    ]
+    assert len(trace) == 1
+    assert "$ai_is_error" not in trace[0]
+    assert "$ai_error" not in trace[0]
+
+
+def test_tool_span_handled_tool_error_respects_privacy_mode(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException("secret details")
+
+    get_weather.handle_tool_error = True
+
+    _invoke_tool_in_chain(
+        mock_client, get_weather, {"city": "Paris"}, privacy_mode=True
+    )
+
+    spans = _tool_spans(mock_client)
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] is None
+    assert spans[0]["$ai_output_state"] is None
+
+
+def test_tool_span_unhandled_tool_error(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "ValueError: boom"
+
+
+def test_convert_message_to_dict_tool_message():
+    from langchain_core.messages import ToolMessage
+
+    from posthog.ai.langchain.callbacks import _convert_message_to_dict
+
+    assert _convert_message_to_dict(
+        ToolMessage(content="Sunny", tool_call_id="call_1", name="get_weather")
+    ) == {
+        "role": "tool",
+        "content": "Sunny",
+        "tool_call_id": "call_1",
+        "name": "get_weather",
+    }
+    assert _convert_message_to_dict(
+        ToolMessage(content="boom", tool_call_id="call_2", status="error")
+    ) == {
+        "role": "tool",
+        "content": "boom",
+        "tool_call_id": "call_2",
+        "status": "error",
+    }
+
+
 def test_openai_reasoning_tokens(mock_client):
     """Test that OpenAI reasoning tokens are captured correctly."""
     prompt = ChatPromptTemplate.from_messages(
@@ -1821,6 +1949,85 @@ def test_claude_on_vertex_subtracts_cache_tokens(mock_client):
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 1000
     assert props["$ai_cache_creation_input_tokens"] == 100
+
+
+def _capture_usage_metadata(mock_client, metadata, usage_metadata):
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata=metadata,
+    )
+    message = AIMessage(content="Response", usage_metadata=usage_metadata)
+    response = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    return mock_client.capture_ai.call_args_list[0][1]["properties"]
+
+
+def test_gemini_output_tokens_exclude_reasoning_tokens(mock_client):
+    """ChatGoogleGenerativeAI folds thoughts_token_count into usage_metadata
+    output_tokens. PostHog prices Gemini reasoning on top of the output count,
+    as the Gemini wrapper reports it, so the handler reports output without it."""
+    # The usage ChatGoogleGenerativeAI.invoke returns for a thinking response
+    # with candidates_token_count=49 and thoughts_token_count=777
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_genai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "input_token_details": {"cache_read": 0},
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_input_tokens"] == 12
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_gemini_output_tokens_already_excluding_reasoning_are_kept(mock_client):
+    """ChatVertexAI (and older langchain-google-genai) report candidates only
+    in output_tokens, so the output count is left as reported."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_vertexai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 49,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_non_gemini_output_tokens_keep_reasoning_tokens(mock_client):
+    """Only Gemini reasoning is priced on top of the output count."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "openai", "ls_model_name": "o4-mini"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 826
+    assert props["$ai_reasoning_tokens"] == 777
 
 
 def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):

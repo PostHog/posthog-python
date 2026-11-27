@@ -1447,8 +1447,10 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
 
 def test_streaming_tool_call_after_server_tool_blocks(mock_client):
     """Stream events address content blocks by their index in the message. Blocks the
-    wrapper does not format (server_tool_use, web_search_tool_result) still take an
-    index, so a later client tool call must keep its streamed arguments."""
+    wrapper passes through as-is (server_tool_use, web_search_tool_result) still take
+    an index, so a later client tool call must keep its streamed arguments. The server
+    tool blocks are recorded like the non-streaming path records them, with the
+    server tool's streamed input."""
     from anthropic.types import (
         InputJSONDelta,
         ServerToolUseBlock,
@@ -1516,6 +1518,17 @@ def test_streaming_tool_call_after_server_tool_blocks(mock_client):
         {
             "role": "assistant",
             "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "weather sf"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [],
+                },
                 {"type": "text", "text": "Booking a table."},
                 {
                     "type": "function",

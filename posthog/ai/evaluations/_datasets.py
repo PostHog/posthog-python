@@ -40,7 +40,7 @@ from ._transport import SyncTransport
 class Datasets:
     """Manage datasets through ``OfflineEvaluations.datasets``.
 
-    Requires a personal key with ``dataset:read`` or ``dataset:write`` and the
+    Requires a key with ``dataset:read`` or ``dataset:write`` and the
     datasets feature enabled. Mutations return after acknowledgment; only item
     creates with a caller-supplied ``client_item_id`` are automatically retried.
     Other lost write responses require inspecting state before retrying.

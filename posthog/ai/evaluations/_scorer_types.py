@@ -11,6 +11,9 @@ from typing_extensions import Required, TypedDict
 
 ScorerKind = Literal["boolean", "numeric", "categorical"]
 ScorerCalculation = Literal["reported", "composite"]
+ScorerScope = Literal["item", "experiment"]
+ExperimentScoreStatistic = Literal["pass_rate", "mean", "true_rate", "category_rate"]
+ExperimentScoreVersionPolicy = Literal["run", "exact", "combine"]
 ScorerOrder = Literal[
     "name",
     "-name",
@@ -109,6 +112,25 @@ class ScorerComposition(TypedDict):
     inputs: list[ScorerCompositionInput]
 
 
+class ExperimentScorerCompositionInput(ScorerCompositionInput, total=False):
+    """A statistic from an item scorer, anchored by a version UUID.
+
+    Omit version_policy to use the single version that scored items in the run.
+    Supply category only for category_rate.
+    """
+
+    statistic: Required[ExperimentScoreStatistic]
+    version_policy: ExperimentScoreVersionPolicy
+    category: str
+
+
+class ExperimentScorerComposition(TypedDict):
+    """Server-evaluated formula over statistics from item scorers in one run."""
+
+    expression: str
+    inputs: list[ExperimentScorerCompositionInput]
+
+
 @dataclass(frozen=True)
 class ScorerInput:
     """Pinned input metadata alongside the source's latest version.
@@ -135,6 +157,8 @@ class Scorer(Generic[_ConfigT]):
     Names are not unique; use ``id`` for subsequent management operations.
     Configuration dictionaries are local snapshots, not live server state.
     ``tags`` contains normalized tag names and is independent of versions.
+    ``suite_keys`` lists defaults on the current version. ``assigned_suite_keys``
+    spans visible versions and is available on detail responses.
     """
 
     id: str
@@ -151,9 +175,12 @@ class Scorer(Generic[_ConfigT]):
     team: int
     tags: tuple[str, ...] = ()
     calculation: ScorerCalculation = "reported"
-    composition: ScorerComposition | None = None
+    composition: ScorerComposition | ExperimentScorerComposition | None = None
     input_scorers: tuple[ScorerInput, ...] = ()
     dependent_composite_count: int = 0
+    scope: ScorerScope = "item"
+    suite_keys: tuple[str, ...] = ()
+    assigned_suite_keys: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -168,7 +195,9 @@ class ScorerVersion(Generic[_ConfigT]):
     created_at: datetime
     created_by: dict[str, Any] | None
     calculation: ScorerCalculation = "reported"
-    composition: ScorerComposition | None = None
+    composition: ScorerComposition | ExperimentScorerComposition | None = None
+    scope: ScorerScope = "item"
+    suite_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

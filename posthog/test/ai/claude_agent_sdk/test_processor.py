@@ -18,7 +18,9 @@ try:
         ResultMessage,
         StreamEvent,
         TextBlock,
+        ToolResultBlock,
         ToolUseBlock,
+        UserMessage,
     )
 
     from posthog.ai.claude_agent_sdk import (
@@ -477,6 +479,161 @@ class TestToolSpanEmission:
         assert props["$ai_span_name"] == "Read"
         assert props["$ai_span_type"] == "tool"
         assert props["$ai_input_state"] == {"file_path": "/tmp/test.py"}
+        # No ToolResultBlock arrived, so the span is flushed without an outcome.
+        assert "$ai_is_error" not in props
+        assert "$ai_output_state" not in props
+
+    @staticmethod
+    async def _run(proc, messages):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(prompt="go", options=ClaudeAgentOptions()):
+                pass
+
+    @staticmethod
+    def _events(mock_client):
+        return [
+            (c.kwargs["event"], c.kwargs["properties"])
+            for c in mock_client.capture_ai.call_args_list
+        ]
+
+    @staticmethod
+    def _tool_turn(result_block, user_message_kwargs=None):
+        return [
+            _make_message_start(),
+            _make_assistant_message(
+                tool_uses=[{"id": "tu_1", "name": "Bash", "input": {"command": "ls"}}]
+            ),
+            _make_message_stop(),
+            UserMessage(content=[result_block], **(user_message_kwargs or {})),
+            _make_message_start(),
+            _make_assistant_message(text="done"),
+            _make_message_stop(),
+            _make_result_message(),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_span_carries_successful_tool_result(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(ToolResultBlock(tool_use_id="tu_1", content="a.txt")),
+        )
+
+        events = self._events(mock_client)
+        names = [name for name, _ in events]
+        # Emitted when the result arrives, before the next generation.
+        assert names == ["$ai_generation", "$ai_span", "$ai_generation", "$ai_trace"]
+        span = events[1][1]
+        assert span["$ai_parent_id"] == events[0][1]["$ai_span_id"]
+        assert span["$ai_output_state"] == "a.txt"
+        assert span["$ai_is_error"] is False
+        assert "$ai_error" not in span
+        assert span["$ai_latency"] >= 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("result_arrives", [True, False])
+    async def test_privacy_enabled_mid_tool_drops_buffered_content(
+        self, processor, mock_client, result_arrives
+    ):
+        turn = self._tool_turn(
+            ToolResultBlock(tool_use_id="tu_1", content="oops", is_error=True)
+        )
+        if not result_arrives:
+            turn = turn[:3] + [_make_result_message()]
+
+        async def query(messages):
+            for i, msg in enumerate(messages):
+                if i == 3:
+                    # Privacy turns on while the tool runs.
+                    mock_client.privacy_mode = True
+                yield msg
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: query(turn),
+        ):
+            async for _ in processor.query(prompt="go", options=ClaudeAgentOptions()):
+                pass
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert len(spans) == 1
+        for key in ("$ai_input_state", "$ai_output_state", "$ai_error"):
+            assert key not in spans[0]
+        if result_arrives:
+            assert spans[0]["$ai_is_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_span_carries_tool_error(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(
+                ToolResultBlock(
+                    tool_use_id="tu_1",
+                    content=[{"type": "text", "text": "ls: permission denied"}],
+                    is_error=True,
+                )
+            ),
+        )
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert len(spans) == 1
+        assert spans[0]["$ai_is_error"] is True
+        assert spans[0]["$ai_error"] == "ls: permission denied"
+        assert spans[0]["$ai_output_state"] == [
+            {"type": "text", "text": "ls: permission denied"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_privacy_mode_keeps_error_flag_but_redacts_result(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client, distinct_id="user", privacy_mode=True
+        )
+        await self._run(
+            proc,
+            self._tool_turn(
+                ToolResultBlock(tool_use_id="tu_1", content="secret", is_error=True)
+            ),
+        )
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert spans[0]["$ai_is_error"] is True
+        assert "$ai_latency" in spans[0]
+        assert "$ai_error" not in spans[0]
+        assert "$ai_output_state" not in spans[0]
+        assert "$ai_input_state" not in spans[0]
+
+    @pytest.mark.asyncio
+    async def test_subagent_tool_result_closes_its_span(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(
+                ToolResultBlock(tool_use_id="tu_1", content="boom", is_error=True),
+                {"parent_tool_use_id": "tu_parent"},
+            ),
+        )
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert len(spans) == 1
+        assert spans[0]["$ai_is_error"] is True
+
+    @pytest.mark.asyncio
+    async def test_pending_span_is_flushed_when_query_ends_without_result(
+        self, processor, mock_client
+    ):
+        await self._run(
+            processor,
+            [
+                _make_message_start(),
+                _make_assistant_message(tool_uses=[{"id": "tu_1", "name": "Bash"}]),
+                _make_message_stop(),
+            ],
+        )
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert len(spans) == 1
+        assert "$ai_is_error" not in spans[0]
 
 
 class TestTraceEmission:

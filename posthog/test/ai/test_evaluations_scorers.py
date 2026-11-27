@@ -156,6 +156,118 @@ def test_composite_versioning_history_and_dependency_filters(scorers):
     assert params["kind"] == "numeric" and params["offset"] == 100
 
 
+def test_experiment_formula_round_trips_across_scorer_operations(scorers):
+    namespace, transport = scorers
+    formula = {
+        "expression": "accuracy",
+        "inputs": [
+            {
+                "alias": "accuracy",
+                "scorer_version_id": VERSION_ID,
+                "statistic": "category_rate",
+                "category": "correct",
+                "version_policy": "combine",
+            }
+        ],
+    }
+    fields = {"scope": "experiment", "calculation": "composite", "composition": formula}
+    response = scorer_response(**fields, suite_keys=["Agent-CI"])
+    transport.request.return_value = response
+    created = invoke(
+        namespace.create,
+        name="Accuracy",
+        kind="numeric",
+        config={},
+        apply_to_suite_keys=["Agent-CI"],
+        **fields,
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "name": "Accuracy",
+        "kind": "numeric",
+        "config": {},
+        "apply_to_suite_keys": ["Agent-CI"],
+        **fields,
+    }
+    assert created.scope == "experiment"
+    assert created.suite_keys == ("Agent-CI",)
+    assert created.assigned_suite_keys is None
+
+    transport.request.return_value = {
+        **response,
+        "assigned_suite_keys": ["Agent-CI", "Release"],
+    }
+    detail = invoke(namespace.get, SCORER_ID)
+    assert detail.composition == formula
+    assert detail.assigned_suite_keys == ("Agent-CI", "Release")
+    invoke(
+        namespace.create_version, SCORER_ID, config={}, composition=detail.composition
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "config": {},
+        "composition": formula,
+    }
+    invoke(
+        namespace.create_version,
+        SCORER_ID,
+        config={},
+        composition=detail.composition,
+        apply_to_suite_keys=[],
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "config": {},
+        "composition": formula,
+        "apply_to_suite_keys": [],
+    }
+
+    transport.request.return_value = version_response(**fields, suite_keys=["Release"])
+    version = invoke(namespace.get_version, SCORER_ID, VERSION_ID)
+    assert version.scope == "experiment"
+    assert version.composition == formula
+    assert version.suite_keys == ("Release",)
+
+    transport.request.return_value = {"valid": True}
+    assert invoke(
+        namespace.validate_composition,
+        kind="numeric",
+        scope="experiment",
+        composition=formula,
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "kind": "numeric",
+        "scope": "experiment",
+        "composition": formula,
+    }
+
+    transport.request.return_value = {
+        "count": 1,
+        "results": [response],
+        "next": None,
+        "previous": None,
+    }
+    page = invoke(namespace.list, scope="experiment", offset=100)
+    assert page.results[0].composition == formula
+    assert transport.request.call_args.kwargs["params"] == {
+        "limit": 100,
+        "offset": 100,
+        "scope": "experiment",
+    }
+
+
+def test_update_can_clear_suite_defaults_for_a_historical_version(scorers):
+    namespace, transport = scorers
+    invoke(
+        namespace.update,
+        SCORER_ID,
+        apply_to_suite_keys=[],
+        suite_version_id=UUID(VERSION_ID),
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "apply_to_suite_keys": [],
+        "suite_version_id": VERSION_ID,
+    }
+    assert transport.request.call_args.kwargs["retry_safe"] is False
+
+
 def test_legacy_scorers_and_versions_default_to_reported(scorers):
     namespace, transport = scorers
     scorer = invoke(
@@ -184,6 +296,9 @@ def test_legacy_scorers_and_versions_default_to_reported(scorers):
     transport.request.return_value = version_response()
     version = invoke(namespace.get_version, SCORER_ID, VERSION_ID)
     assert (version.calculation, version.composition) == ("reported", None)
+    assert scorer.scope == version.scope == "item"
+    assert scorer.suite_keys == version.suite_keys == ()
+    assert scorer.assigned_suite_keys is None
 
 
 @pytest.mark.parametrize("config", [None, {}, {"min": 0, "max": 1}])

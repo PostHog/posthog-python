@@ -835,6 +835,25 @@ def test_partial_bulk_error_retains_acknowledged_chunks_and_exact_pending_work(
     )
 
 
+@pytest.mark.parametrize(
+    "version_options", [{}, {"experiment_scorer_version_id": None}]
+)
+def test_creation_leaves_suite_default_to_the_server(client, version_options):
+    evaluations, transport = client
+    invoke(
+        evaluations.create_experiment,
+        name="Run",
+        suite_key="Agent-CI",
+        **version_options,
+    )
+    submission = json.loads(transport.request.call_args.kwargs["body"])
+    assert submission["suite_key"] == "Agent-CI"
+    if version_options:
+        assert submission["experiment_scorer_version_id"] is None
+    else:
+        assert "experiment_scorer_version_id" not in submission
+
+
 def test_creation_error_exposes_generated_identity_for_exact_retry(client):
     evaluations, transport = client
     transport.request.side_effect = EvaluationAPIError(persistence="unknown")
@@ -842,6 +861,7 @@ def test_creation_error_exposes_generated_identity_for_exact_retry(client):
         invoke(
             evaluations.create_experiment,
             name="Recoverable",
+            experiment_scorer_version_id=UUID(VERSION_ID),
             run_source=None,
             expected_result_count=0,
         )
@@ -849,6 +869,7 @@ def test_creation_error_exposes_generated_identity_for_exact_retry(client):
     saved = caught.value.submission
     assert saved == json.loads(original)
     assert saved["run_source"] is None
+    assert saved["experiment_scorer_version_id"] == VERSION_ID
     transport.request.side_effect = respond
     experiment = invoke(evaluations.create_experiment, **saved)
     assert experiment.id == saved["id"]

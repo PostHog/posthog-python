@@ -6,7 +6,7 @@ into standardized formats for PostHog tracking.
 """
 
 import json
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from posthog.ai.media import to_plain
 from posthog.ai.types import (
@@ -159,6 +159,11 @@ def format_anthropic_streaming_content(
                     "data": block.get("data"),
                 }
             )
+
+        elif block.get("type"):
+            # Server tool blocks (server_tool_use, web_search_tool_result, ...) pass
+            # through as-is, matching what the non-streaming path records.
+            formatted.append(cast(FormattedContentItem, dict(block)))
 
     return formatted
 
@@ -388,16 +393,21 @@ def finalize_anthropic_tool_input(
     if hasattr(event, "index") and event.index < len(content_blocks):
         block = content_blocks[event.index]
 
-        if block.get("type") == "function" and block.get("id") in tools_in_progress:
-            tool = tools_in_progress[block["id"]]
+        block_id = block.get("id")
+        if block_id is not None and block_id in tools_in_progress:
+            tool = tools_in_progress[block_id]
 
             try:
-                block["function"]["arguments"] = json.loads(tool["input_string"])
+                parsed = json.loads(tool["input_string"])
+                if block.get("type") == "function":
+                    block["function"]["arguments"] = parsed
+                elif tool["input_string"]:
+                    cast(Dict[str, Any], block)["input"] = parsed
             except (json.JSONDecodeError, Exception):
                 # Keep empty dict if parsing fails
                 pass
 
-            del tools_in_progress[block["id"]]
+            del tools_in_progress[block_id]
 
 
 def format_anthropic_streaming_input(kwargs: Dict[str, Any]) -> Any:
@@ -569,6 +579,16 @@ def _start_anthropic_block(
         }
         return redacted_block, None
 
+    # Keep other blocks (server_tool_use, web_search_tool_result, ...) in their
+    # plain form, as format_anthropic_response does. A server tool's input streams
+    # in through input_json_delta events like a client tool's.
+    plain = to_plain(block)
+    if isinstance(plain, dict) and plain.get("type"):
+        other_block = cast(StreamingContentBlock, plain)
+        if "input" in plain and plain.get("id"):
+            return other_block, {"block": other_block, "input_string": ""}
+        return other_block, None
+
     return None, None
 
 
@@ -592,7 +612,8 @@ def _append_anthropic_tool_json(
     if hasattr(event, "index") and event.index < len(content_blocks):
         block = content_blocks[event.index]
 
-        if block.get("type") == "function" and block.get("id") in tools_in_progress:
-            tool = tools_in_progress[block["id"]]
+        block_id = block.get("id")
+        if block_id is not None and block_id in tools_in_progress:
+            tool = tools_in_progress[block_id]
             partial_json = getattr(event.delta, "partial_json", "")
             tool["input_string"] += partial_json

@@ -1,7 +1,10 @@
 """A stream that raises mid-flight must be captured as an error, not as a 200."""
 
+import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from posthog.ai.types import StreamingEventData
@@ -151,6 +154,247 @@ def test_openai_responses_stream_error(mock_client):
     props = _props(mock_client)
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "connection reset"
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(
+            (
+                {"code": "server_error", "message": "provider failed for this input"},
+                "provider failed for this input",
+                "_ResponsesStreamError server_error",
+            ),
+            id="server-error",
+        ),
+        pytest.param(
+            (
+                {
+                    "code": "rate_limit_exceeded",
+                    "message": "provider failed for this input",
+                },
+                "provider failed for this input",
+                "_ResponsesStreamError rate_limit_exceeded",
+            ),
+            id="rate-limit",
+        ),
+        pytest.param(
+            (None, "OpenAI response failed", "_ResponsesStreamError"),
+            id="missing-error",
+        ),
+        pytest.param(
+            (
+                {"code": "server_error", "message": ""},
+                "OpenAI response failed",
+                "_ResponsesStreamError server_error",
+            ),
+            id="empty-message",
+        ),
+        pytest.param(
+            (
+                {"code": "server_error", "message": " \t\n "},
+                "OpenAI response failed",
+                "_ResponsesStreamError server_error",
+            ),
+            id="whitespace-message",
+        ),
+        pytest.param(
+            (
+                {
+                    "code": "invalid code containing SECRET_INPUT",
+                    "message": "provider failed for this input",
+                },
+                "provider failed for this input",
+                "_ResponsesStreamError",
+            ),
+            id="unsafe-code",
+        ),
+    ]
+)
+def failed_response_error(request):
+    return request.param
+
+
+@pytest.fixture
+def failed_response_transport(failed_response_error):
+    error, _, _ = failed_response_error
+    event = {
+        "type": "response.failed",
+        "sequence_number": 1,
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "model": "gpt-4",
+            "output": [],
+            "error": error,
+        },
+    }
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize("privacy_mode", [False, True])
+def test_openai_responses_failed_event(
+    mock_client, failed_response_transport, failed_response_error, privacy_mode
+):
+    from posthog.ai.openai import OpenAI
+
+    with OpenAI(
+        api_key="test",
+        posthog_client=mock_client,
+        http_client=httpx.Client(transport=failed_response_transport),
+    ) as client:
+        events = list(
+            client.responses.create(
+                model="gpt-4",
+                input="hi",
+                stream=True,
+                posthog_distinct_id="user",
+                posthog_options={"process_person_profile": True},
+                posthog_privacy_mode=privacy_mode,
+            )
+        )
+
+    assert [event.type for event in events] == ["response.failed"]
+    error, message, privacy_summary = failed_response_error
+    if error is None:
+        assert events[0].response.error is None
+    else:
+        assert events[0].response.error.code == error["code"]
+        assert events[0].response.error.message == error["message"]
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 0
+    assert props["$ai_stop_reason"] == "failed"
+    assert props["$ai_error"] == (privacy_summary if privacy_mode else message)
+    assert mock_client.capture_ai.call_args.kwargs["options"]["process_person_profile"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy_mode", [False, True])
+async def test_openai_responses_failed_event_async(
+    mock_client, failed_response_transport, failed_response_error, privacy_mode
+):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async with AsyncOpenAI(
+        api_key="test",
+        posthog_client=mock_client,
+        http_client=httpx.AsyncClient(transport=failed_response_transport),
+    ) as client:
+        stream = await client.responses.create(
+            model="gpt-4",
+            input="hi",
+            stream=True,
+            posthog_distinct_id="user",
+            posthog_options={"process_person_profile": True},
+            posthog_privacy_mode=privacy_mode,
+        )
+        events = [event async for event in stream]
+
+    assert [event.type for event in events] == ["response.failed"]
+    error, message, privacy_summary = failed_response_error
+    if error is None:
+        assert events[0].response.error is None
+    else:
+        assert events[0].response.error.code == error["code"]
+        assert events[0].response.error.message == error["message"]
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 0
+    assert props["$ai_error"] == (privacy_summary if privacy_mode else message)
+    assert props["$ai_stop_reason"] == "failed"
+    assert mock_client.capture_ai.call_args.kwargs["options"]["process_person_profile"]
+
+
+@pytest.fixture
+def failed_response_chunk():
+    return SimpleNamespace(
+        type="response.failed",
+        response=SimpleNamespace(
+            status="failed",
+            model="gpt-4",
+            output=[],
+            usage=None,
+            error=SimpleNamespace(code="server_error", message="event failure"),
+        ),
+    )
+
+
+@pytest.mark.parametrize("privacy_mode", [False, True])
+def test_openai_responses_stream_exception_precedence(
+    mock_client, failed_response_chunk, privacy_mode
+):
+    from posthog.ai.openai import OpenAI
+
+    failure = _StatusError("stream reset")
+
+    def stream():
+        yield failed_response_chunk
+        raise failure
+
+    with patch("openai.resources.responses.Responses.create", return_value=stream()):
+        with OpenAI(api_key="test", posthog_client=mock_client) as client:
+            events = client.responses.create(
+                model="gpt-4",
+                input="hi",
+                stream=True,
+                posthog_privacy_mode=privacy_mode,
+            )
+            assert next(events) is failed_response_chunk
+            with pytest.raises(_StatusError, match="stream reset") as raised:
+                next(events)
+
+    assert raised.value is failure
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 529
+    assert props["$ai_error"] == (
+        "_StatusError: 529" if privacy_mode else "stream reset"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privacy_mode", [False, True])
+async def test_openai_responses_stream_exception_precedence_async(
+    mock_client, failed_response_chunk, privacy_mode
+):
+    from posthog.ai.openai import AsyncOpenAI
+
+    failure = _StatusError("stream reset")
+
+    async def stream():
+        yield failed_response_chunk
+        raise failure
+
+    async def create(self, **kwargs):
+        return stream()
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=create):
+        async with AsyncOpenAI(api_key="test", posthog_client=mock_client) as client:
+            events = await client.responses.create(
+                model="gpt-4",
+                input="hi",
+                stream=True,
+                posthog_privacy_mode=privacy_mode,
+            )
+            assert await events.__anext__() is failed_response_chunk
+            with pytest.raises(_StatusError, match="stream reset") as raised:
+                await events.__anext__()
+
+    assert raised.value is failure
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 529
+    assert props["$ai_error"] == (
+        "_StatusError: 529" if privacy_mode else "stream reset"
+    )
 
 
 def test_anthropic_stream_error(mock_client):
