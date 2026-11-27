@@ -661,6 +661,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
                 "capture_engagement": False,
+                "category": "newsletter",
                 "distinct_id": "user_123",
             },
             {
@@ -669,6 +670,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
                 "capture_engagement": False,
+                "category": "newsletter",
                 "distinct_id": "user_123",
             },
         ),
@@ -690,6 +692,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
+                "category": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -926,6 +929,16 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
             },
             TypeError,
         ),
+        (
+            "category_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "category": "newsletter",
+            },
+            TypeError,
+        ),
         ("tracking_not_bool_or_dict", {"html": HTML, "tracking": "off"}, TypeError),
         ("sensitive_not_bool", {"html": HTML, "sensitive": "yes"}, TypeError),
     ]
@@ -1077,6 +1090,7 @@ SEND_FIELDS = frozenset(
         "tracking",
         "distinct_id",
         "attachments",
+        "category",
     }
 )
 REFERENCE_FIELDS = frozenset({"sha256", "filename", "content_type", "content_id"})

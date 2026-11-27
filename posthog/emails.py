@@ -33,7 +33,25 @@ posthog.emails.send(
     html=rendered_html,
     distinct_id="user_123",
 )
+
+# Marketing email in one of the project's message categories
+posthog.emails.send(
+    to="user@example.com",
+    template_key="november-digest",
+    subject="What's new in November",
+    html=digest_html,
+    category="newsletter",
+    distinct_id="user_123",
+)
 ```
+
+Message categories: ``category`` on a code send is the key of one of the
+project's message categories, such as ``newsletter``. A marketing category
+skips recipients who opted out of it or of all marketing email, fills
+``{{ unsubscribe_url }}`` with the recipient's preferences link, and adds
+List-Unsubscribe headers. A marketing email can't have ``cc`` or ``bcc``.
+PostHog refuses an unknown key with ``category_not_found``, and a marketing
+email with copies with ``marketing_copies_unsupported``.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -391,6 +409,15 @@ class CodeEmailArgs(_RecipientArgs):
             key you leave out keeps its default. Turn clicks on for a
             sensitive email only when its links are safe to send through
             PostHog's click tracking. The template form doesn't take it.
+        category: The key of one of the project's message categories, such
+            as ``"newsletter"``. A marketing category skips recipients who
+            opted out of it or of all marketing email, fills
+            ``{{ unsubscribe_url }}`` with the recipient's preferences link,
+            and adds List-Unsubscribe headers. A marketing email can't have
+            ``cc`` or ``bcc``. PostHog raises ``category_not_found`` when the
+            project has no category with that key, and
+            ``marketing_copies_unsupported`` for a marketing email with
+            ``cc`` or ``bcc``. The template form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -413,6 +440,7 @@ class CodeEmailArgs(_RecipientArgs):
     capture_engagement: NotRequired[Optional[bool]]
     sensitive: NotRequired[Optional[bool]]
     tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
+    category: NotRequired[Optional[str]]
 
 
 _ATTACHMENT_FIELDS = frozenset(EmailAttachment.__annotations__)
@@ -428,6 +456,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "capture_engagement",
         "sensitive",
         "tracking",
+        "category",
     }
 )
 
@@ -543,6 +572,8 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
+    if "category" in args:
+        payload["category"] = _nonempty_text(args, "category")
     if references:
         payload["attachments"] = references
     return _PreparedSend(
