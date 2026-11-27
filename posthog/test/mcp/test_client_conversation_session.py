@@ -6,7 +6,7 @@ posthog-js reproduces too. Runs under both MCP majors."""
 
 import asyncio
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import jsonschema
@@ -338,7 +338,7 @@ async def test_chatgpt_calls_on_a_shared_http_pod_keep_no_session_alive():
 
     await call(user_agent=OTHER)
     for _ in range(3):
-        data.last_activity -= timedelta(minutes=20)
+        data.last_activity = datetime.now(timezone.utc) - timedelta(minutes=20)
         await call(user_agent=CHATGPT, meta=CHATGPT_META)
     await call(user_agent="another-client/2.0")
     await _flush()

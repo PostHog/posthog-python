@@ -65,8 +65,8 @@ from ._model_parameters import (
     resolve_model,
 )
 from ._output_instructions import add_instructions_to_output_schema
-from .logger import log, warn
 from .constants import SESSIONLESS_PROTOCOL_VERSION
+from .logger import log, warn
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity

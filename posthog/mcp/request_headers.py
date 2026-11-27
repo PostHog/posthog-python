@@ -74,7 +74,10 @@ def get_request_headers(extra: Any) -> Optional[RequestHeaderBag]:
 
 
 def read_transport_session_id(extra: Any, *, handshake: bool = False) -> Optional[str]:
-    """The SSE transport checks the ``session_id`` query parameter against its open
+    """The ``Mcp-Session-Id`` header the client sent, else the ``session_id`` query
+    parameter of an SSE request that completed a handshake, else ``None``.
+
+    The SSE transport checks the ``session_id`` query parameter against its open
     streams, while a stateless request never completes a handshake, so adding the
     parameter to a request picks no session."""
     header = read_mcp_session_header(get_request_headers(extra))

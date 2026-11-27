@@ -9,7 +9,7 @@ from posthog.mcp import McpAnalytics
 from posthog.mcp._instrumentation import start_tools_list_lifecycle
 from posthog.mcp._internal import set_server_tracking_data
 from posthog.mcp import request_headers
-from posthog.mcp.session import derive_session_id_from_mcp_session
+from posthog.mcp.session import derive_session_id_from_mcp_session, handshake_session
 from posthog.test.mcp._helpers import (
     MCP_MAJOR,
     FakeClient,
@@ -131,6 +131,40 @@ async def test_a_one_client_connection_rotates_after_30_idle_minutes(
 
     (first_session, _), (second_session, _) = _sessions(client)
     assert (first_session != second_session) is rotated
+
+
+async def test_the_first_call_of_a_connection_keeps_the_session_its_handshake_opened():
+    client = FakeClient()
+
+    with freeze_time("2026-11-25 12:00:00", real_asyncio=True) as clock:
+        data = fresh_data(client, enable_conversation_id=False)
+        await start_tools_list_lifecycle(
+            data,
+            request={"method": "tools/list", "params": {}},
+            extra={},
+            mcp_session_id=None,
+            token=None,
+            client_name=None,
+            client_version=None,
+            protocol_version=None,
+        )
+        listed = data.session_id
+        clock.tick(timedelta(minutes=31))
+        await run_call(data)
+    await _flush()
+
+    assert _sessions(client) == [(listed, "generated")]
+
+
+async def test_a_handshake_over_http_with_no_session_gets_its_own_and_leaves_the_shared_one():
+    data = fresh_data(enable_conversation_id=False)
+    shared = data.session_id
+
+    resolved = await handshake_session(data, None, None, over_http=True)
+
+    assert resolved.source == "request"
+    assert resolved.session_id != shared
+    assert data.session_id == shared
 
 
 async def test_a_listing_does_not_keep_an_idle_connection_alive():

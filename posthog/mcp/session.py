@@ -240,7 +240,10 @@ async def handshake_session_id(
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
 ) -> str:
-    """The id of :func:`handshake_session`, kept for callers of the earlier API."""
+    """The id of :func:`handshake_session`, kept for callers of the earlier API.
+
+    Stdio-only without a session id: it resolves to the process's own session. A
+    caller serving HTTP uses :func:`handshake_session` with ``over_http=True``."""
     return (await handshake_session(data, mcp_session_id, token)).session_id
 
 
@@ -347,6 +350,8 @@ async def resolve_session_id_with_source(
 
 
 def _is_stale(data: MCPAnalyticsData, now: datetime) -> bool:
+    if data.last_activity is None:
+        return False
     timeout_seconds = INACTIVITY_TIMEOUT_IN_MINUTES * 60
     return (now - data.last_activity).total_seconds() >= timeout_seconds
 
