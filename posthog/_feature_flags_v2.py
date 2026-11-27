@@ -95,6 +95,7 @@ _MAX_OBJECT_DEPTH = 20
 # The reference's JSON reader gives up on deeper nesting.
 _MAX_JSON_DEPTH = 127
 _MAX_U64 = 2**64 - 1
+_MIN_I64 = -(2**63)
 
 _CONFIG_FIELDS = frozenset(
     {
@@ -491,6 +492,19 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _is_wide_integer(value: Any) -> bool:
+    """Whether a value is an integer outside 64 bits.
+
+    The reference's request reader rejects such an integer. Its flag document reader
+    reads it as binary64.
+    """
+    return (
+        _is_number(value)
+        and isinstance(value, int)
+        and not _MIN_I64 <= value <= _MAX_U64
+    )
+
+
 def _object(value: Any, field: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         raise _malformed(field)
@@ -686,10 +700,22 @@ def _read_predicate(value: Any) -> _Predicate:
     if negation is not None and not isinstance(negation, bool):
         raise _malformed("property.negation")
     _check_unread_fields(prop)
-    filter_value = prop.get("value")
+    filter_value = _narrow_wide_integers(prop.get("value"))
     return _Predicate(
         key, name, filter_value, bool(negation), _read_operand(name, filter_value)
     )
+
+
+def _narrow_wide_integers(value: Any) -> Any:
+    """A filter value with each integer outside 64 bits read as binary64, as the
+    reference reads it. ``_check_json`` has bounded the nesting and the numbers."""
+    if _is_wide_integer(value):
+        return float(value)
+    if isinstance(value, list):
+        return [_narrow_wide_integers(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _narrow_wide_integers(item) for key, item in value.items()}
+    return value
 
 
 def _check_unread_fields(prop: Mapping[str, Any]) -> None:
@@ -900,12 +926,12 @@ def _match_operator(
         return False
     if not present:
         return name in _OPERATORS_MATCHING_ABSENCE
+    _check_json_text(value)
     if name in _NUMBER_COMPARISONS:
         return _match_number(predicate, value)
     if name in _DATE_COMPARISONS:
         return _match_date(predicate, value, context)
     # The other operators compare the value's JSON text.
-    _check_json_text(value)
     if name in _EXACT_OPERATORS:
         matching_version = 2 if context.explicit_exact_matching else 1
         matched = _match_exact_property(predicate.value, value, matching_version)
@@ -924,7 +950,8 @@ def _match_operator(
 def _check_json_text(value: Any) -> None:
     """Decline a property value that the reference cannot hold as JSON.
 
-    These are a number beyond binary64 and a value nested deeper than the reference's
+    These are an integer outside 64 bits, a number that is not finite, a string or
+    object key with a lone surrogate, and a value nested deeper than the reference's
     JSON reader reads. The version 1 helpers that write the JSON text would raise on
     the extreme ones: an integer too long to write out, or nesting deeper than Python
     recurses.
@@ -935,9 +962,11 @@ def _check_json_text(value: Any) -> None:
         if isinstance(item, (dict, list)):
             if depth > _MAX_JSON_DEPTH:
                 raise _unusable_context("A property value is nested too deeply")
-            children = item.values() if isinstance(item, dict) else item
+            children = (*item, *item.values()) if isinstance(item, dict) else item
             pending.extend((child, depth + 1) for child in children)
-        elif _is_number(item) and not _is_json_scalar(item):
+        elif isinstance(item, str) and not _is_text(item):
+            raise _unusable_context("A property value is not valid Unicode text")
+        elif _is_wide_integer(item) or (_is_number(item) and not _is_json_scalar(item)):
             raise _unusable_context("A property value is a number JSON cannot carry")
 
 
@@ -964,9 +993,10 @@ def _match_number(predicate: _Predicate, value: Any) -> bool:
 
 
 # The decimal numbers the reference reads from a string. Python's ``float`` also takes
-# surrounding whitespace and underscores.
+# surrounding whitespace and underscores. Fraction digits come only after the point:
+# two digit runs that could share digits would backtrack in quadratic time.
 _NUMBER_PATTERN = re.compile(
-    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
     re.IGNORECASE,
 )
 
@@ -981,12 +1011,8 @@ def _to_number(value: Any) -> Optional[float]:
         raise _unusable_context(
             f"A property value of type {type(value).__name__} is not a JSON value"
         )
-    if isinstance(value, float) and not math.isfinite(value):
-        raise _unusable_context("A property value is not a finite number")
-    try:
-        return float(value)
-    except OverflowError:
-        raise _unusable_context("A property value is too large to compare") from None
+    # The caller checked that the number is finite binary64.
+    return float(value)
 
 
 # --- Semantic versions ---------------------------------------------------------------

@@ -738,6 +738,17 @@ def test_an_object_value_is_returned_as_configured():
         ("not_icontains_multi", ["x", "RO"], "pro", False),
         ("icontains_multi", [], "pro", False),
         ("icontains_multi", [1, True], "plan-1", True),
+        ("starts_with", "pro", "pro\U0001f600", True),
+        # A filter integer outside 64 bits is read as binary64, as the flags service
+        # reads a flag document. An integer within them is read as itself.
+        ("exact", 10**20, "1e+20", True),
+        ("exact", 10**20, "100000000000000000000", False),
+        ("exact", [-(2**63) - 1], "-9.223372036854776e+18", True),
+        ("icontains_multi", [2**64], "1.8446744073709552e+19", True),
+        ("exact", 2**64 - 1, "18446744073709551615", True),
+        ("exact", -(2**63), "-9223372036854775808", True),
+        ("exact", "18446744073709551615", 2**64 - 1, True),
+        ("exact", "-9223372036854775808", -(2**63), True),
         ("regex", "^nu", None, True),
         ("regex", "", "anything", True),
         # Without a filter value nothing matches, also for is_not.
@@ -809,6 +820,28 @@ def test_a_number_operator_reads_numbers_like_the_flags_service(
     assert _match(operator, filter_value, property_value) == expected
 
 
+# Many digits and then a character that ends the number. A pattern whose digit
+# quantifiers overlap backtracks over this in quadratic time.
+LONG_DIGITS = "1" * 100_000 + "x"
+
+
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize(
+    "operator, filter_value, property_value, expected",
+    [
+        pytest.param("gt", 5, LONG_DIGITS, "invalid_property", id="gt-property"),
+        pytest.param("gt", LONG_DIGITS, 6, "invalid_property", id="gt-filter"),
+        pytest.param(
+            "is_date_after", "2025-06-15", LONG_DIGITS, "missing_context", id="date"
+        ),
+    ],
+)
+def test_a_long_string_that_is_not_a_number_is_read_in_linear_time(
+    operator, filter_value, property_value, expected
+):
+    assert _match(operator, filter_value, property_value) == expected
+
+
 @pytest.mark.parametrize(
     "operator, filter_value, property_value",
     [
@@ -829,10 +862,26 @@ def test_a_number_operator_reads_numbers_like_the_flags_service(
         pytest.param("icontains", "pro", 10**5000, id="icontains-5000-digits"),
         pytest.param("regex", "pro", 10**5000, id="regex-5000-digits"),
         pytest.param("semver_eq", "1.2.3", 10**5000, id="semver-5000-digits"),
+        # An integer outside the 64 bits the flags service reads from a request.
+        pytest.param("exact", "100000000000000000000", 10**20, id="exact-above-u64"),
+        pytest.param("gt", 5, 2**64, id="gt-above-u64"),
+        pytest.param("semver_eq", "1.2.3", 2**64, id="semver-above-u64"),
+        pytest.param("exact", "pro", [-(2**63) - 1], id="exact-below-i64"),
         # Nesting deeper than a JSON reader reads, and than Python recurses.
         pytest.param("exact", "pro", _nested(1500), id="exact-nested"),
         pytest.param("icontains", "pro", _nested(1500), id="icontains-nested"),
         pytest.param("semver_eq", "1.2.3", _nested(1500), id="semver-nested"),
+        pytest.param("gt", 5, _nested(1500), id="gt-nested"),
+        pytest.param("is_date_after", "2025-06-15", _nested(1500), id="date-nested"),
+        # A lone surrogate, in a string or an object key, which the flags service
+        # cannot decode.
+        pytest.param("starts_with", "pro", "pro\ud800", id="starts-with-surrogate"),
+        pytest.param("icontains", "pro", ["pro\udc00"], id="icontains-surrogate"),
+        pytest.param("icontains", "pro", {"\ud800": "pro"}, id="key-surrogate"),
+        pytest.param("not_icontains_multi", ["x"], "\ud800", id="multi-surrogate"),
+        pytest.param("semver_eq", "1.2.3", "1.2.3\ud800", id="semver-surrogate"),
+        pytest.param("gt", 5, "6\ud800", id="gt-surrogate"),
+        pytest.param("is_date_after", "2025-06-15", "\ud800", id="date-surrogate"),
     ],
 )
 def test_a_property_value_json_cannot_carry_is_inconclusive(
