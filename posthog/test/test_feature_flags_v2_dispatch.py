@@ -19,6 +19,7 @@ import copy
 import datetime
 import hashlib
 import json
+import threading
 import warnings
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 from unittest import mock
@@ -1421,6 +1422,95 @@ def test_the_identity_of_version_1_definitions_is_unchanged():
     assert Client._hash_flag_definitions(data) == (
         hashlib.sha256(encoded.encode("utf-8")).hexdigest()
     )
+
+
+# --- Publication ----------------------------------------------------------------------
+
+RELABELLED = _definition(
+    "shelf-label",
+    _filters(_targeted("spacious"), return_type="string", default="standard"),
+)
+
+
+def _load_through_the_api(client: Client, definition: Dict[str, Any]) -> None:
+    flags = [_v1_definition("legacy-shelf"), definition]
+    response = GetResponse(
+        data={"flags": copy.deepcopy(flags), "group_type_mapping": {}, "cohorts": {}}
+    )
+    with mock.patch("posthog.client.get", return_value=response):
+        client._load_feature_flags()
+
+
+def _load_from_the_cache(client: Client, definition: Dict[str, Any]) -> None:
+    stored = {
+        "flags": [_v1_definition("legacy-shelf")],
+        "flags_v2": [definition],
+        "group_type_mapping": {},
+        "cohorts": {},
+    }
+    client._flag_definition_cache_provider = _Provider(copy.deepcopy(stored))
+    with mock.patch("posthog.client.get") as get:
+        client._load_feature_flags()
+    assert get.call_count == 0
+
+
+def _published(client: Client) -> Tuple[Any, Any]:
+    """The filters of the published config version 2 flag and its value. Fails unless
+    its parsed document comes from that definition."""
+    snapshot = client._local_evaluation_snapshot()
+    definition = snapshot["flags_by_key"]["shelf-label"]
+    [(key, parsed)] = snapshot["parsed_v2_definitions"].items()
+    assert key == "shelf-label" and parsed.definition is definition
+    result = _result(client, "shelf-label", send_feature_flag_events=False)
+    return definition["filters"], result and result.get_value()
+
+
+@pytest.mark.parametrize(
+    "load", [_load_through_the_api, _load_from_the_cache], ids=["api", "cache"]
+)
+def test_definitions_are_parsed_before_the_publication_lock(client, load):
+    # A flag read during a slow parse is not blocked: it reads the definitions
+    # published before, with the documents parsed from them.
+    load(client, STRING)
+    parse_config = v2._parse_config
+    parsing = threading.Event()
+    release = threading.Event()
+    errors: List[BaseException] = []
+    reads: List[Tuple[Any, Any]] = []
+
+    def slow_parse(filters: Any) -> Any:
+        if threading.current_thread() is loader:
+            parsing.set()
+            assert release.wait(5)
+        return parse_config(filters)
+
+    def thread(target: Any) -> threading.Thread:
+        def run() -> None:
+            try:
+                target()
+            except BaseException as error:
+                errors.append(error)
+
+        return threading.Thread(target=run)
+
+    loader = thread(lambda: load(client, RELABELLED))
+    reader = thread(lambda: reads.append(_published(client)))
+    with mock.patch.object(v2, "_parse_config", side_effect=slow_parse):
+        try:
+            loader.start()
+            assert parsing.wait(5)
+            reader.start()
+            reader.join(2)
+            assert not reader.is_alive(), "a flag read waited for definitions to parse"
+        finally:
+            release.set()
+            loader.join(5)
+            if reader.ident is not None:
+                reader.join(5)
+
+    assert not errors
+    assert reads == [(STRING["filters"], "compact")]
+    assert _published(client) == (RELABELLED["filters"], "spacious")
 
 
 # --- The corpora through the client ---------------------------------------------------
