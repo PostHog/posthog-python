@@ -99,6 +99,7 @@ def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
     } <= set(capabilities)
     assert "flags_response_v4" in capabilities
     assert "feature_flag_payloads" in capabilities
+    assert "feature_flags_local_evaluation_v2" in capabilities
     assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
     assert [c for c in capabilities if c.startswith("encoding_")] == [
@@ -294,6 +295,63 @@ def test_rejects_conflicting_evaluation_modes(adapter, route):
         },
     )
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "conflict", [{"only_evaluate_locally": True}, {"force_remote": True}]
+)
+def test_remote_fallback_conflicts_with_the_other_modes(adapter, conflict):
+    client = initialize(adapter)
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "allow_remote_fallback": True,
+            **conflict,
+        },
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize("properties,local", [({"plan": "banana"}, True), ({}, False)])
+def test_remote_fallback_uses_the_default_getter_on_the_local_client(
+    adapter, monkeypatch, properties, local
+):
+    # A conclusive local result needs no request; an inconclusive one asks /flags
+    # from the client that holds the definitions, and the read sends its event.
+    client = initialize(adapter)
+    monkeypatch.setattr(
+        posthog.client, "get", Mock(return_value=GetResponse(data=definitions()))
+    )
+    client.post("/reload_feature_flag_definitions", json={})
+    remote = Mock(
+        return_value=posthog.client.normalize_flags_response(
+            {"featureFlags": {"flag": "remote-value"}}
+        )
+    )
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    unused = Mock(side_effect=AssertionError("The remote-only client is not used"))
+    monkeypatch.setattr(adapter.state.remote_client, "_get_flags_decision", unused)
+    captured = Mock()
+    monkeypatch.setattr(adapter.state.client, "capture", captured)
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_properties": properties,
+            "allow_remote_fallback": True,
+        },
+    )
+    assert response.json == {
+        "success": True,
+        "value": True if local else "remote-value",
+    }
+    assert remote.call_count == (0 if local else 1)
+    [call] = captured.call_args_list
+    assert call.args[0] == "$feature_flag_called"
+    assert call.kwargs["properties"]["locally_evaluated"] is local
 
 
 @pytest.mark.parametrize("timeout", [0, -1, 30001, True, "100", None])

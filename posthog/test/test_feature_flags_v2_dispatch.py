@@ -320,21 +320,31 @@ def test_any_other_config_version_goes_to_the_config_version_2_evaluator(
         assert result is not None and result.get_value() == "remote"
 
 
-def test_the_definitions_request_is_unchanged(client):
-    # This release evaluates a config version 2 definition when one is loaded, but it
-    # does not ask for them yet: the request still selects the legacy definitions.
+def test_every_definitions_request_asks_for_the_version_2_feed(client):
+    # The first load and every poll select the feed that carries config version 2
+    # definitions, including a poll that sends the ETag of that feed and gets 304.
+    feed = copy.deepcopy(FEED["feed"])
     with mock.patch(
         "posthog.client.get",
-        return_value=GetResponse(
-            data={"flags": [], "group_type_mapping": {}, "cohorts": {}}
-        ),
+        side_effect=[
+            GetResponse(data=feed, etag='"feed-v2"'),
+            GetResponse(data=None, etag='"feed-v2"', not_modified=True),
+            GetResponse(data=feed, etag='"feed-v2-next"'),
+        ],
     ) as get:
         client.load_feature_flags()
+        client.load_feature_flags()
+        # The 304 kept the config version 2 definitions the first load installed.
+        assert "layout-preview" in (client.feature_flags_by_key or {})
+        client.load_feature_flags()
 
-    [request] = get.call_args_list
-    assert (
-        request.args[1] == f"/flags/definitions?token={FAKE_TEST_API_KEY}&send_cohorts"
-    )
+    expected = f"/flags/definitions?token={FAKE_TEST_API_KEY}&send_cohorts&v=2"
+    assert [request.args[1] for request in get.call_args_list] == [expected] * 3
+    assert [request.kwargs["etag"] for request in get.call_args_list] == [
+        None,
+        '"feed-v2"',
+        '"feed-v2"',
+    ]
 
 
 # --- Results ------------------------------------------------------------------------

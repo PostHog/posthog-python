@@ -318,6 +318,9 @@ def health():
         "fail_open",
         "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
+        # Definitions requests send v=2, and config version 2 flags evaluate locally.
+        # /get_feature_flag honors allow_remote_fallback.
+        "feature_flags_local_evaluation_v2",
         # Remote /flags requests send ?v=4 and read the v4 flag record.
         "flags_response_v4",
         # The legacy payload accessor is exposed on /get_feature_flag_payload.
@@ -634,7 +637,20 @@ def get_feature_flag():
         group_properties = data.get("group_properties")
         disable_geoip = data.get("disable_geoip")
         only_evaluate_locally = data.get("only_evaluate_locally", False)
-        force_remote = data.get("force_remote", not only_evaluate_locally)
+        # The SDK's default getter on the client with definitions: local first, then
+        # a /flags request for a flag that local evaluation cannot decide.
+        allow_remote_fallback = data.get("allow_remote_fallback", False)
+        if allow_remote_fallback and (
+            only_evaluate_locally or data.get("force_remote")
+        ):
+            return jsonify(
+                {
+                    "error": "allow_remote_fallback conflicts with only_evaluate_locally and force_remote"
+                }
+            ), 400
+        force_remote = data.get(
+            "force_remote", not (only_evaluate_locally or allow_remote_fallback)
+        )
 
         if only_evaluate_locally and force_remote:
             return jsonify(
@@ -673,7 +689,7 @@ def get_feature_flag():
             groups=groups,
             group_properties=group_properties,
             disable_geoip=disable_geoip,
-            only_evaluate_locally=not force_remote,
+            only_evaluate_locally=not (force_remote or allow_remote_fallback),
         )
 
         # Ensure the SDK's side-effect $feature_flag_called event is sent before

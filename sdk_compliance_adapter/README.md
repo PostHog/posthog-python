@@ -60,6 +60,14 @@ explicit property matching; it does not change the SDK's default matching mode.
   they cannot accidentally resolve from local rules. Legacy remote responses
   and flag-called events are preserved. Reset disposes both Clients.
 
+The adapter also advertises `feature_flags_local_evaluation_v2`: the SDK asks for
+definitions with `v=2` and evaluates config version 2 flags locally.
+
+- `/get_feature_flag` with `allow_remote_fallback: true` calls the SDK's default
+  getter on the Client with definitions: local first, then a `/flags` request for
+  a flag it cannot decide. It sends the flag-called events of the read and
+  conflicts with `only_evaluate_locally` and `force_remote`.
+
 The adapter is sequential (it does not advertise parallel-test support).
 
 ## Documentation

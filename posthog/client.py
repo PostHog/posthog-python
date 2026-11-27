@@ -4430,9 +4430,11 @@ class Client(object):
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         old_fingerprint: Optional[str] = None
         try:
+            # v=2 selects the feed with config version 2 definitions. For a project
+            # without them, and on a server that ignores v, the body is the same.
             response = get(
                 personal_api_key,
-                f"/flags/definitions?token={self.api_key}&send_cohorts",
+                f"/flags/definitions?token={self.api_key}&send_cohorts&v=2",
                 self.host,
                 timeout=10,
                 etag=request_etag,
