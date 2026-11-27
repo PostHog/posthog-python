@@ -15,6 +15,7 @@ class MCPAnalyticsEventType:
 
     CUSTOM = "posthog:custom"
     MCP_FEEDBACK = "mcp:feedback"
+    MCP_INPUT_REQUIRED = "mcp:input_required"
     MCP_MISSING_CAPABILITY = "mcp:missing_capability"
     MCP_INITIALIZE = "mcp:initialize"
     MCP_PROMPTS_GET = "mcp:prompts/get"

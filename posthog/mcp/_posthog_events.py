@@ -26,6 +26,7 @@ from .types import Event, PostHogCaptureEvent
 _BUILT_IN_EVENT_NAME_BY_TYPE = {
     MCPAnalyticsEventType.CUSTOM: PostHogMCPAnalyticsEvent.CUSTOM,
     MCPAnalyticsEventType.MCP_FEEDBACK: PostHogMCPAnalyticsEvent.FEEDBACK,
+    MCPAnalyticsEventType.MCP_INPUT_REQUIRED: PostHogMCPAnalyticsEvent.INPUT_REQUIRED,
     MCPAnalyticsEventType.MCP_MISSING_CAPABILITY: PostHogMCPAnalyticsEvent.MISSING_CAPABILITY,
     MCPAnalyticsEventType.MCP_INITIALIZE: PostHogMCPAnalyticsEvent.INITIALIZE,
     MCPAnalyticsEventType.MCP_PROMPTS_GET: PostHogMCPAnalyticsEvent.PROMPT_GET,
@@ -332,13 +333,19 @@ def _add_truthy_properties(
 
 
 def _add_resource_properties(event: Event, properties: Dict[str, Any]) -> None:
+    is_input_required = (
+        event.get("event_type") == MCPAnalyticsEventType.MCP_INPUT_REQUIRED
+    )
+    if is_input_required:
+        properties[_P.INPUT_REQUEST_METHODS] = event.get("input_request_methods") or []
     if event.get("resource_name"):
-        is_unknown_tool = (
+        # Neither event is a tool call, so neither carries `$mcp_resource_name`.
+        names_tool_only = is_input_required or (
             event.get("event_type") == MCPAnalyticsEventType.MCP_UNKNOWN_TOOL
         )
-        if not is_unknown_tool:
+        if not names_tool_only:
             properties[_P.RESOURCE_NAME] = event["resource_name"]
-        if is_unknown_tool or _is_tool_call(event):
+        if names_tool_only or _is_tool_call(event):
             properties[_P.TOOL_NAME] = event["resource_name"]
     if event.get("tool_description") and _is_tool_call(event):
         properties[_P.TOOL_DESCRIPTION] = event["tool_description"]

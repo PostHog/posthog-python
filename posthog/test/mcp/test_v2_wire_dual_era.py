@@ -19,8 +19,9 @@ import json
 from contextlib import asynccontextmanager
 
 import httpx
+import mcp.types as mcp_types
 import pytest
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 
 from posthog.mcp import (
     decode_session_id,
@@ -384,6 +385,112 @@ async def test_legacy_stateless_token_survives_across_instances():
     assert props["$mcp_client_name"] == "legacy-probe"
     assert props["$mcp_protocol_version"] == LEGACY_PROTOCOL_VERSION
     assert props["$session_id"] == token.session_id
+
+
+# --- input_required rounds -------------------------------------------------------
+
+
+def make_confirming_server():
+    """A destructive tool that asks the user to confirm before it runs."""
+    server = MCPServer("confirm-server")
+
+    @server.tool()
+    def delete_project(
+        project_id: int, ctx: Context
+    ) -> mcp_types.CallToolResult | mcp_types.InputRequiredResult:
+        if not ctx.input_responses:
+            confirm = mcp_types.ElicitRequestFormParams(
+                message=f"Delete project {project_id}?",
+                requested_schema={"type": "object", "properties": {}},
+            )
+            return mcp_types.InputRequiredResult(
+                # Keyed out of insertion order: methods are reported by key.
+                input_requests={
+                    "z_confirm": mcp_types.ElicitRequest(params=confirm),
+                    "a_roots": mcp_types.ListRootsRequest(),
+                },
+                request_state="server-state",
+            )
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="deleted")]
+        )
+
+    return server
+
+
+async def test_modern_input_required_round_is_not_a_tool_call():
+    server = make_confirming_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    async with wire(server) as http:
+        asked = await modern_call(http, "delete_project", {"project_id": 42})
+        await _flush()
+        assert not _events(client, "$mcp_tool_call")
+
+        retry = rpc(
+            "tools/call",
+            {
+                "name": "delete_project",
+                "arguments": {"project_id": 42},
+                "_meta": modern_meta(),
+                "inputResponses": {
+                    "z_confirm": {"action": "accept", "content": {}},
+                    "a_roots": {"roots": []},
+                },
+                "requestState": asked.json()["result"]["requestState"],
+            },
+            2,
+        )
+        done = await http.post(
+            "/mcp", json=retry, headers=modern_headers("tools/call", "delete_project")
+        )
+    await _flush()
+
+    assert done.json()["result"]["content"][0]["text"] == "deleted"
+    assert len(_events(client, "$mcp_tool_call")) == 1
+    rounds = _events(client, "$mcp_input_required")
+    assert len(rounds) == 1
+    props = rounds[0]["properties"]
+    assert props["$mcp_tool_name"] == "delete_project"
+    assert props["$mcp_input_request_methods"] == ["roots/list", "elicitation/create"]
+    assert isinstance(props["$mcp_duration_ms"], (int, float))
+    assert "$mcp_is_error" not in props
+    sent = json.dumps(client.events, default=str)
+    assert "Delete project 42?" not in sent
+    assert asked.json()["result"]["requestState"] not in sent
+
+
+async def test_legacy_input_required_is_a_failed_tool_call():
+    server = make_confirming_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    async with wire(server) as http:
+        init = rpc(
+            "initialize",
+            {
+                "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                "capabilities": {"elicitation": {}},
+                "clientInfo": {"name": "legacy-probe", "version": "0.1"},
+            },
+        )
+        response = await http.post("/mcp", json=init, headers=legacy_headers())
+        headers = legacy_headers()
+        if response.headers.get("mcp-session-id"):
+            headers["mcp-session-id"] = response.headers["mcp-session-id"]
+        call = rpc(
+            "tools/call", {"name": "delete_project", "arguments": {"project_id": 1}}, 2
+        )
+        response = await http.post("/mcp", json=call, headers=headers)
+    await _flush()
+
+    assert "error" in response.json()
+    assert not _events(client, "$mcp_input_required")
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 1
+    assert calls[0]["properties"]["$mcp_is_error"] is True
+    assert calls[0]["properties"]["$mcp_error_type"] == "input_required"
 
 
 async def test_modern_rejects_initialize_but_analytics_stays_out_of_it():

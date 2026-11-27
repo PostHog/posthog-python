@@ -407,6 +407,45 @@ tool call whenever the registry can't rule the tool out:
 - On standalone `fastmcp.FastMCP` 3.0.0 and later, a mounted server, proxy, or
   other provider hides its disabled tools.
 
+## Tools that ask for more input
+
+On the 2026-07-28 revision, a tool can answer `tools/call` with an
+`InputRequiredResult`, such as a form asking the user to confirm a delete. The
+client retries the call with the answers. The round that asks is not a tool
+call: `instrument()` sends `$mcp_input_required` with `$mcp_tool_name`,
+`$mcp_duration_ms`, and `$mcp_input_request_methods` (the `method` of each
+input request, such as `["elicitation/create"]`). The retry that completes the
+call sends the one `$mcp_tool_call`. The requests, the user's answers, and
+`requestState` are never captured.
+
+A client on an earlier revision cannot receive the round, so the framework
+answers with an error. The SDK records that as a failed `$mcp_tool_call` with
+`$mcp_error_type: "input_required"`.
+
+In a custom dispatcher, `prepare_tool_result()` sets `input_request_methods`
+when the result is a round. Record it with `capture_input_required()`:
+
+```python
+call = posthog.prepare_tool_call(name, raw_args, original_tool=tool)
+prepared = posthog.prepare_tool_result(dispatch(name, call.args), call)
+if prepared.input_request_methods is not None:
+    posthog.capture_input_required(
+        name,
+        input_request_methods=prepared.input_request_methods,
+        duration_ms=duration_ms,
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+    )
+else:
+    posthog.capture_tool_call(
+        name,
+        duration_ms=duration_ms,
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+    )
+return prepared.result
+```
+
 ## Virtual tools on a paginated `tools/list`
 
 `instrument()` advertises up to two tools of its own: `get_more_tools`

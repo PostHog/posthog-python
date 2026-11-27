@@ -59,6 +59,7 @@ def capture_event(
         "tool_category": event_input.get("tool_category"),
         "tool_description": event_input.get("tool_description"),
         "listed_tool_names": event_input.get("listed_tool_names"),
+        "input_request_methods": event_input.get("input_request_methods"),
         "parameters": event_input.get("parameters"),
         "response": event_input.get("response"),
         "user_intent": event_input.get("user_intent"),
