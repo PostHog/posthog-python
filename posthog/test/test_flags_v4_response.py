@@ -83,9 +83,9 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    assert source["release"] == "1.30.0"
-    assert source["revision"] == "6414114501396d96aadf2412fdd8054a03076782"
-    assert source["contract_version"] == "10.0.0"
+    assert source["release"] == "1.36.0"
+    assert source["revision"] == "29c57856523be09fcccab3c45a8e852835987521"
+    assert source["contract_version"] == "10.1.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
