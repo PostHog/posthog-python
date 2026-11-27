@@ -595,6 +595,7 @@ class TestPromptsGet(TestPrompts):
         message = str(context.exception)
         self.assertIn('Authentication failed for prompt "restricted-prompt"', message)
         self.assertIn("personal API key", message)
+        self.assertIn("project secret API key", message)
 
     def test_throw_when_no_personal_api_key_configured(self):
         """Should throw when no personal_api_key is configured."""

@@ -210,17 +210,17 @@ def _authentication_error(reference: str) -> Exception:
     return Exception(
         f"[PostHog Prompts] Authentication failed for {reference}. "
         "The key may be missing, expired, or the wrong type. Prompt fetches "
-        "require a personal API key (starts with 'phx_'); a project secret "
-        "key is not accepted. Pass this key as personal_api_key when you "
-        "construct Prompts directly, or as secret_key when you configure the "
-        "PostHog client."
+        "need a personal API key (starts with 'phx_') or a project secret "
+        "API key (starts with 'phs_') with the llm_prompt:read scope. Pass "
+        "it as personal_api_key when you construct Prompts directly, or as "
+        "secret_key when you configure the PostHog client."
     )
 
 
 def _access_denied_error(reference: str) -> Exception:
     return Exception(
         f"[PostHog Prompts] Access denied for {reference}. "
-        "Check that your personal_api_key has the correct permissions and the LLM prompts feature is enabled."
+        "Check that your personal_api_key has the llm_prompt:read scope and the LLM prompts feature is enabled."
     )
 
 
@@ -287,7 +287,8 @@ class Prompts:
 
         Args:
             posthog: PostHog client instance (optional if personal_api_key provided)
-            personal_api_key: Direct personal API key (optional if posthog provided)
+            personal_api_key: Personal API key (phx_) or project secret API key (phs_)
+                with the llm_prompt:read scope (optional if posthog provided)
             project_api_key: Direct project API key (optional if posthog provided)
             host: PostHog host (defaults to app endpoint)
             default_cache_ttl_seconds: Default cache TTL (defaults to 300)
