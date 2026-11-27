@@ -188,6 +188,30 @@ class AsyncClient:
         email_request_max_retries: int = 2,
         migrated_from: Optional[str] = None,
     ) -> None:
+        """Create an async PostHog client. Import it as ``AsyncPosthog`` from ``posthog``.
+
+        Keep one client for your app's lifetime on one event loop. Open it with
+        ``async with AsyncPosthog(...)``, or call ``await shutdown()`` on teardown.
+
+        #### Know what to await
+
+        Queue methods write to memory and return right away. Network reads and lifecycle calls are coroutines.
+
+        | Call | Methods | Reach for it when |
+        | --- | --- | --- |
+        | Don't ``await`` | ``capture``, ``capture_ai``, ``set``, ``set_once``, ``group_identify``, ``alias``, ``capture_exception`` | Queueing events on the request path without waiting on HTTP |
+        | ``await`` | ``capture_immediate``, ``capture_ai_immediate`` | A handler must confirm the upload attempt finished before returning |
+        | ``await`` | ``evaluate_flags``, ``get_remote_config_payload``, ``emails.send``, ``emails.get``, ``flush``, ``shutdown``, ``join`` | Evaluating flags, sending emails, or draining queues on the event loop |
+
+        #### The differences from ``Client``
+
+        Shared constructor options behave the same as on ``Client(...)``, with these differences:
+
+        - **Remote flags only.** ``secret_key`` authenticates ``get_remote_config_payload()`` and ``emails``. ``AsyncPosthog`` doesn't poll flag definitions locally, so ``enable_local_evaluation``, ``poll_interval``, ``flag_definition_cache_provider``, and ``flag_fallback_cache_url`` aren't accepted.
+        - **Async callbacks.** ``before_send`` and ``on_error`` accept regular functions or ``async def`` coroutines.
+        - **Shared contexts.** ``AsyncPosthog`` has no context methods. Open a context with ``posthog.new_context()``, ``posthog.scoped()``, or ``PosthogASGIMiddleware``, then call ``posthog.identify_context()`` and ``posthog.tag()`` inside it.
+        - **Client-only options and methods.** ``sync_mode``, ``start_span()``, ``metrics``, ``traces``, ``enable_exception_autocapture``, ``enable_exception_autocapture_rate_limiting``, and the ``exception_autocapture_*`` rate-limit options live on sync ``Posthog`` only and raise ``TypeError`` if passed here.
+        """
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
         if flush_interval <= 0:
@@ -360,14 +384,13 @@ class AsyncClient:
     @property
     def emails(self) -> AsyncEmails:
         """
-        Send transactional email from PostHog email templates or from content
-        in your code, and read the status of each email sent with ``get``.
+        Send transactional email from PostHog templates or inline code, and read
+        delivery status with ``get``.
 
-        Needs ``secret_key``, a project secret API key with the ``transactional_email:write``
-        scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
-        Cloud app host of ``host``. ``email_request_timeout_seconds`` and
-        ``email_request_max_retries`` configure each send. A disabled or shut-down
-        client sends nothing. See ``posthog.emails`` for setup.
+        - **Requirements.** Needs ``posthog[async]`` and a ``secret_key`` project secret API key with the ``transactional_email:write`` scope.
+        - **Routing.** Sends go to ``app_host``, or to the PostHog Cloud app host of ``host``.
+        - **Retries and timeouts.** Configured by ``email_request_timeout_seconds`` and ``email_request_max_retries``.
+        - **Lifecycle.** A disabled or shut-down client sends nothing. See ``posthog.emails`` for full setup.
 
         Examples:
             ```python
@@ -700,7 +723,11 @@ class AsyncClient:
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Queue an event without blocking for network delivery."""
+        """Queue an event without blocking for network delivery.
+
+        Don't ``await`` this method. Call ``await capture_immediate()`` to wait for
+        delivery, or see ``Client.capture`` for parameter rules.
+        """
         return self._capture(event, self._analytics_lane, kwargs)
 
     def capture_ai(
@@ -846,6 +873,13 @@ class AsyncClient:
         }
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """Queue a ``$set`` event to overwrite person properties.
+
+        Don't ``await`` this method, which uses ``identify_context()`` when
+        ``distinct_id`` is omitted and folds active tags into ``$set``. Without a
+        distinct ID (explicit or from ``identify_context()``), it sends nothing
+        and returns ``None``.
+        """
         try:
             msg = self._build_person_properties_event("$set", "$set", kwargs)
             if msg is None:
@@ -860,6 +894,11 @@ class AsyncClient:
             return None
 
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """Queue a ``$set_once`` event to set person properties only when unset.
+
+        Don't ``await`` this method. It follows the same context and tag rules as
+        ``set()`` without overwriting existing values.
+        """
         try:
             msg = self._build_person_properties_event("$set_once", "$set_once", kwargs)
             if msg is None:
@@ -884,6 +923,12 @@ class AsyncClient:
         distinct_id: Optional[ID_TYPES] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
+        """Queue a ``$groupidentify`` event to update group properties.
+
+        Don't ``await`` this method, which requires the Group Analytics add-on. Pass
+        ``name`` in ``properties`` for the UI display name, and pass ``groups`` on
+        ``capture()`` to link events.
+        """
         try:
             if not _stringify_id(group_type):
                 self.log.warning(
@@ -934,6 +979,11 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
+        """Queue a ``$create_alias`` event linking ``previous_id`` to ``distinct_id``.
+
+        Don't ``await`` this method. Neither ID falls back to ``identify_context()``,
+        and you shouldn't alias users to a shared placeholder like ``"anonymous"``.
+        """
         try:
             resolved_previous_id = _stringify_id(previous_id)
             if not resolved_previous_id:
@@ -1383,6 +1433,11 @@ class AsyncClient:
             await asyncio.gather(queue_join, workers_finished, return_exceptions=True)
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
+        """Drain queued analytics and AI events while keeping the client open.
+
+        Await this before a short-lived handler returns rather than calling
+        ``shutdown()`` per request.
+        """
         if asyncio.current_task() in self._all_worker_tasks() or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
             return
@@ -1419,6 +1474,11 @@ class AsyncClient:
             await http_client.aclose()
 
     async def shutdown(self) -> None:
+        """Flush queued events, stop async workers, and close HTTP transports.
+
+        Await this once at app teardown, or use ``async with AsyncPosthog(...)``.
+        Don't reuse the client afterward.
+        """
         current = asyncio.current_task()
         if (
             current in self._all_worker_tasks()
@@ -1492,6 +1552,7 @@ class AsyncClient:
                 raise errors[0]
 
     async def join(self) -> None:
+        """Alias for ``await shutdown()``."""
         await self.shutdown()
 
 

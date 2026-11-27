@@ -159,9 +159,13 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         socket_options: A list of ``(level, option, value)`` tuples accepted by
             urllib3/``socket.setsockopt()``, or ``None`` to reset defaults.
 
-    Example:
+    Examples:
+        ```python
+        import socket
         from posthog import set_socket_options
+
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
+        ```
     """
     global _session, _flags_session, _capture_session, _socket_options
     if socket_options == _socket_options:
