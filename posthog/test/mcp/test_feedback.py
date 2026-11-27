@@ -236,7 +236,7 @@ def test_properties_carry_all_fields_and_redact_pii():
 
 def test_properties_bound_free_text_and_tool_name():
     report = parse_feedback_report(
-        {"feedback_type": "issue", "summary": "s" * 4000, "tool_name": "t" * 500}
+        {"feedback_type": "issue", "summary": "s" * 5000, "tool_name": "t" * 500}
     )
     props = build_feedback_event_properties(report)
     assert len(props["$mcp_feedback_summary"]) == 2048
@@ -395,6 +395,18 @@ def test_nested_extras_keep_key_based_redaction():
         ({"n": 10**5000}, "0000000000", {"n": "[redacted]"}),
         ({"sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"[redacted]": 1}),
         ({"key sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"key [redacted]": 1}),
+        (
+            {"QUJD" * 3000: 1},
+            "QUJDQUJD",
+            {"[binary data redacted - not supported by PostHog MCP analytics]": 1},
+        ),
+        (
+            {
+                "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----": 1
+            },
+            "MIIEowIBAAKCAQEA",
+            {"[redacted]": 1},
+        ),
     ],
 )
 def test_object_extras_redact_identifiers_in_keys_and_numbers(

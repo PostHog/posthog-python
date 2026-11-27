@@ -15,7 +15,14 @@ import os
 import re
 import sys
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
-from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import (
+    SplitResult,
+    parse_qsl,
+    unquote,
+    urlencode,
+    urlsplit,
+    urlunsplit,
+)
 
 from ._event_types import MCPAnalyticsEventType
 from ._truncation import (
@@ -35,6 +42,12 @@ _ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
 _POSTHOG_TOKEN_PATTERN = re.compile(r"\bph[a-z]_[A-Za-z0-9_-]{20,}\b")
+# The detectors below judge one space-free word, and a PEM marker holds a space, so
+# a key block is matched whole. One cut off by truncation runs to the end of the text.
+_PEM_PRIVATE_KEY_PATTERN = re.compile(
+    r"-----BEGIN [A-Z0-9 -]{0,40}PRIVATE KEY-----[\s\S]*?"
+    r"(?:-----END [A-Z0-9 -]{0,40}PRIVATE KEY-----|\Z)"
+)
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|"
     r"access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|"
@@ -44,6 +57,8 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 
 _JSON_STRING_STOP = re.compile(r'["\\\n]')
 _JSON_NUMBER = re.compile(r"-?\d[\d.eE+-]*")
+# What a cut can leave of a bare value: a sign, or the start of a literal.
+_JSON_CUT_VALUE = re.compile(r"(?:t(?:ru?)?|f(?:a(?:ls?)?)?|n(?:ul?)?|-)(?=\n?\Z)")
 _NON_SPACE = re.compile(r"\S")
 
 # No leading `\b`: a word boundary needs a non-word character before the scheme,
@@ -444,7 +459,9 @@ def _redact_bounded(value: str, redact: Callable[[str], str]) -> str:
 def _unfinished_credential_start(head: str) -> Optional[int]:
     """Where the word running off the end of ``head`` starts, when it starts
     inside what truncation keeps and opens a credential whose end neither scan
-    reached: a URL authority with no `/`, `?` or `#` after it, or a JWT."""
+    reached: a URL authority with no `/`, `?` or `#` after it, or a JWT. The URL
+    sanitizer reads a query or fragment value once decoded, so the authority is
+    looked for in the decoded word too."""
     if head[-1].isspace():
         return None
     space = _WHITESPACE_PATTERN.search(head[::-1])
@@ -452,13 +469,18 @@ def _unfinished_credential_start(head: str) -> Optional[int]:
     if start >= _MAX_USER_INTENT_LENGTH:
         return None
     word = head[start:-1]
-    authority = word.rfind("://")
-    if _JWT_OPENING in word or (
-        authority != -1
-        and not any(char in word[authority + 3 :] for char in _URL_AUTHORITY_ENDS)
+    if _JWT_OPENING in word or any(
+        _opens_unfinished_authority(text) for text in (word, unquote(word))
     ):
         return start
     return None
+
+
+def _opens_unfinished_authority(text: str) -> bool:
+    authority = text.rfind("://")
+    return authority != -1 and not any(
+        char in text[authority + 3 :] for char in _URL_AUTHORITY_ENDS
+    )
 
 
 def _is_record(value: Any) -> bool:
@@ -492,6 +514,7 @@ def _redact_credentials(value: str, is_secret: Callable[[str], bool]) -> str:
     entropy detector scans. Running the URL pass last loses nothing — it only
     redacts or percent-encodes, so it never exposes a credential the detectors
     could have matched."""
+    value = _PEM_PRIVATE_KEY_PATTERN.sub(_REDACTED_VALUE, value)
     value = _redact_json_members(value)
     return _redact_secret_tokens(
         _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value), is_secret
@@ -626,7 +649,8 @@ class _JsonMemberScan:
             return pos + 1
         if pos == len(text) or (pos == len(text) - 1 and text[pos] == "\n"):
             return pos
-        return None
+        cut_value = _JSON_CUT_VALUE.match(text, pos)
+        return cut_value.end() if cut_value else None
 
     def skip_space(self, pos: int) -> int:
         non_space = _NON_SPACE.search(self.text, pos)
@@ -838,6 +862,8 @@ def _sanitize_free_text_key(key: Any) -> Any:
     two such keys would both become ``[redacted]`` and one value would be lost."""
     if not isinstance(key, str):
         return _sanitize_free_text_leaf(key)
+    if _is_binary_blob(key):
+        return _BINARY_DATA_MARKER
     return _redact_bounded(
         key,
         lambda text: _sanitize_urls(

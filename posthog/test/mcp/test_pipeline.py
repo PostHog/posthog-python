@@ -6,6 +6,7 @@ import json
 import random
 import re
 import time
+import urllib.parse
 from datetime import datetime, timezone
 
 import pytest
@@ -203,7 +204,9 @@ def test_json_member_redaction_runs_in_linear_time_on_adversarial_text(value):
 
 # The pattern posthog-go and posthog-rs match JSON members with (with every
 # array item after the first needing its comma), run on Python's re. The SDK's
-# scanner must find exactly its members, only without its quadratic retries.
+# scanner must find exactly its members, only without its quadratic retries. The
+# one addition is the start of a bare value at the end of the text, which a scan
+# cut off mid-array has to read as the array still running.
 _JSON_STRING_ORACLE = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
 _JSON_SCALAR_ORACLE = _JSON_STRING_ORACLE + r"|-?\d[\d.eE+-]*|true|false"
 _JSON_ITEM_ORACLE = r"(?:" + _JSON_SCALAR_ORACLE + r"|null)\s*"
@@ -214,7 +217,7 @@ _JSON_MEMBER_ORACLE = re.compile(
     + _JSON_ITEM_ORACLE
     + r"(?:,\s*"
     + _JSON_ITEM_ORACLE
-    + r")*(?:,\s*)?)?(?:\]|$))"
+    + r")*(?:,\s*)?)?(?:\]|(?:t(?:ru?)?|f(?:a(?:ls?)?)?|n(?:ul?)?|-)?$))"
 )
 
 
@@ -222,7 +225,18 @@ def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
     monkeypatch.setattr(sanitization, "_should_redact_key", lambda key: True)
     rng = random.Random(1223)
     alphabet = ['"', '"', "\\", ":", ",", "[", "]", " ", "\n", "1", "-", "e", "x"]
-    words = ["true", "false", "null", '"k"', '"k": ', "[1, 2]", '\\"']
+    words = [
+        "true",
+        "false",
+        "null",
+        "tru",
+        "fa",
+        "nul",
+        '"k"',
+        '"k": ',
+        "[1, 2]",
+        '\\"',
+    ]
     texts = [
         "".join(rng.choice(alphabet + words) for _ in range(rng.randrange(16)))
         for _ in range(30_000)
@@ -232,6 +246,49 @@ def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
             lambda member: member.group(1) + '"[redacted]"', text
         )
         assert sanitization._redact_json_members(text) == expected, repr(text)
+
+
+@pytest.mark.parametrize(
+    "array",
+    [
+        pytest.param(["hunter2"] + [True] * 801, id="cut inside true"),
+        pytest.param(["hunter2999"] + [-12] * 900, id="cut after a minus sign"),
+        pytest.param(["hunter2"] + [None] * 801, id="cut inside null"),
+    ],
+)
+def test_a_sensitive_array_stays_redacted_when_the_cuts_end_inside_a_literal(array):
+    text = json.dumps({"token": array}, separators=(",", ":"))
+    for cut in (2048, 3072):
+        assert "hunter2" not in sanitization._redact_json_members(text[:cut])
+    assert "hunter2" not in _captured_intent(text)
+
+
+_PEM_KEY = (
+    "-----BEGIN RSA PRIVATE KEY-----\n"
+    "MIIEowIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8PbnGy0AHB7M\n"
+    "-----END RSA PRIVATE KEY-----"
+)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(_PEM_KEY, id="alone"),
+        pytest.param(f"my key is {_PEM_KEY} thanks", id="in prose"),
+        pytest.param(f"{_PEM_KEY[:-30]}", id="without its footer"),
+    ],
+)
+def test_a_pem_private_key_is_redacted_in_free_text(text):
+    captured = sanitize_captured_value(text)
+    assert "MIIEowIBAAKCAQEA" not in captured
+    assert "PRIVATE KEY" not in captured
+
+
+def test_a_pem_private_key_longer_than_the_scan_is_redacted_in_an_intent():
+    pem = "-----BEGIN PRIVATE KEY-----\n" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n" * 150
+    captured = _captured_intent("keep this " + pem + "-----END PRIVATE KEY-----")
+    assert "MIIEvQIBADANBgkq" not in captured
+    assert captured.startswith("keep this ")
 
 
 def test_sanitize_redacts_large_base64():
@@ -907,6 +964,7 @@ def _straddling(identifier: str, cut: int) -> str:
     [
         pytest.param("1-1." * 250_000, id="separated digits"),
         pytest.param("lorem ipsum " * 100_000, id="prose"),
+        pytest.param("-----BEGIN PRIVATE KEY ----- " * 50_000, id="pem headers"),
     ],
 )
 def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
@@ -929,6 +987,10 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
 def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment, cut):
     captured = _captured_intent(_straddling(identifier, cut))
     assert fragment not in captured
+
+
+def _encoded_inner_url() -> str:
+    return urllib.parse.quote("https://admin:" + "p" * 4000 + "@localhost/x", safe="")
 
 
 def _jwt_padded_to(length: int) -> str:
@@ -978,6 +1040,24 @@ def _jwt_padded_to(length: int) -> str:
             "eyJ",
             "x " * 775,
             id="jwt whose last separator is past both cuts",
+        ),
+        pytest.param(
+            "Open https://h/?next=" + _encoded_inner_url(),
+            "p" * 32,
+            "Open ",
+            id="encoded nested url password past both cuts",
+        ),
+        pytest.param(
+            "Open https://h/#next=" + _encoded_inner_url(),
+            "p" * 32,
+            "Open ",
+            id="encoded nested url in the fragment",
+        ),
+        pytest.param(
+            "Open https://h/?next=https%3A//admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Open ",
+            id="partly encoded nested scheme",
         ),
     ],
 )
