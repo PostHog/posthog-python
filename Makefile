@@ -13,7 +13,7 @@ public_api_check:
 
 build_release:
 	rm -rf dist/*
-	python setup.py sdist bdist_wheel
+	uv build --out-dir dist
 
 # Builds the `posthoganalytics` PyPI package, which is a mirror of `posthog`
 # published under a different name for internal use by posthog/posthog.
@@ -40,7 +40,8 @@ build_release_analytics:
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog\./from posthoganalytics\./g' {} \;
 	find ./posthoganalytics -name "*.bak" -delete
 	rm -rf posthog
-	python setup_analytics.py sdist bdist_wheel
+	python setup_analytics.py
+	uv build --out-dir dist
 	mkdir posthog
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics /from posthog /g' {} \;
 	find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthoganalytics\./from posthog\./g' {} \;
@@ -65,11 +66,7 @@ prep_local:
 	cd ../posthog-python-local && find ./posthoganalytics -type f -name "*.py" -exec sed -i.bak -e 's/from posthog\./from posthoganalytics\./g' {} \;
 	cd ../posthog-python-local && find ./posthoganalytics -name "*.bak" -delete
 	cd ../posthog-python-local && rm -rf posthog
-	cd ../posthog-python-local && sed -i.bak 's/from version import VERSION/from posthoganalytics.version import VERSION/' setup_analytics.py
-	cd ../posthog-python-local && rm setup_analytics.py.bak
-	cd ../posthog-python-local && sed -i.bak 's/"posthog"/"posthoganalytics"/' setup.py
-	cd ../posthog-python-local && rm setup.py.bak
-	cd ../posthog-python-local && python -c "import setup_analytics" 2>/dev/null || true
+	cd ../posthog-python-local && python setup_analytics.py && rm pyproject.toml.backup
 	@echo "Local copy created at ../posthog-python-local"
 	@echo "Install with: pip install -e ../posthog-python-local"
 

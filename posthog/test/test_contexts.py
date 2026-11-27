@@ -4,6 +4,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import posthog
 from posthog.async_client import AsyncPosthog
 from posthog.client import Client
@@ -301,6 +303,7 @@ class TestContexts(unittest.TestCase):
         hasattr(os, "fork") and hasattr(os, "register_at_fork"),
         "requires os.fork and os.register_at_fork",
     )
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
     def test_fork_clears_context_in_child_and_preserves_parent(self):
         def context_state():
             return (

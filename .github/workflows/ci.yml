@@ -74,7 +74,7 @@ jobs:
 
             - name: Check public API snapshot
               run: |
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra dev --with pytest --with pytest-timeout python .github/scripts/test_check_public_api.py
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra dev --with pytest --with pytest-timeout --with pytest-asyncio python .github/scripts/test_check_public_api.py
                   make public_api_check
 
     strict-type-smoke:

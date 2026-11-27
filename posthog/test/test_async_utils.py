@@ -4,6 +4,8 @@ import time
 import unittest
 from unittest import mock
 
+import pytest
+
 from posthog._async_utils import _BackgroundEventLoopRunner, _LoopStartup
 
 
@@ -227,6 +229,10 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
         self.assertEqual(len(run_errors), 1)
         self.assertIsNone(awaitable.cr_frame)
 
+    # Python 3.14 deprecates the event loop policy API exercised here.
+    @pytest.mark.filterwarnings(
+        r"ignore:'asyncio\.(get_event_loop_policy|set_event_loop_policy|DefaultEventLoopPolicy)' is deprecated:DeprecationWarning"
+    )
     def test_runner_preserves_configured_event_loop_policy(self):
         runner = _BackgroundEventLoopRunner()
         original_policy = asyncio.get_event_loop_policy()
@@ -250,6 +256,10 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
         finally:
             asyncio.set_event_loop_policy(original_policy)
 
+    # Python 3.14 deprecates the event loop policy API exercised here.
+    @pytest.mark.filterwarnings(
+        r"ignore:'asyncio\.(get_event_loop_policy|set_event_loop_policy|DefaultEventLoopPolicy)' is deprecated:DeprecationWarning"
+    )
     def test_runner_uses_context_aware_fallback_for_read_only_policy_loop(self):
         runner = _BackgroundEventLoopRunner()
         original_policy = asyncio.get_event_loop_policy()

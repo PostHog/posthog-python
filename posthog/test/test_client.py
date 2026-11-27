@@ -3320,6 +3320,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(loop.is_closed())
         self.assertTrue(client._join_cleanup_complete)
 
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
     def test_async_cache_provider_process_executor_remains_supported(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
 

@@ -1,66 +1,28 @@
-import os
-import sys
-import tomli
-import tomli_w
+"""Rewrite pyproject.toml so the build produces the `posthoganalytics` mirror.
+
+Run by `make build_release_analytics` and `make prep_local` after the source has
+been copied to `posthoganalytics/`. The original is kept in pyproject.toml.backup.
+"""
+
 import shutil
 
-try:
-    from setuptools import setup
-except ImportError:
-    from distutils.core import setup
+import tomli
+import tomli_w
 
-# Don't import analytics-python module here, since deps may not be installed
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "posthoganalytics"))
-from version import VERSION  # noqa: E402
-
-
-# Copy the original pyproject.toml as backup
 shutil.copy("pyproject.toml", "pyproject.toml.backup")
 
-# Read the original pyproject.toml
 with open("pyproject.toml", "rb") as f:
     config = tomli.load(f)
 
-# Override specific values
 config["project"]["name"] = "posthoganalytics"
 config["project"]["readme"] = "README_ANALYTICS.md"
+config["tool"]["setuptools"]["packages"] = [
+    "posthoganalytics" + package.removeprefix("posthog")
+    for package in config["tool"]["setuptools"]["packages"]
+]
+config["tool"]["setuptools"]["exclude-package-data"] = {
+    "posthoganalytics": config["tool"]["setuptools"]["exclude-package-data"]["posthog"]
+}
 
-# Rename packages from posthog.* to posthoganalytics.*
-if "packages" in config["tool"]["setuptools"]:
-    new_packages = []
-    for package in config["tool"]["setuptools"]["packages"]:
-        if package == "posthog":
-            new_packages.append("posthoganalytics")
-        elif package.startswith("posthog."):
-            new_packages.append(package.replace("posthog.", "posthoganalytics.", 1))
-        else:
-            new_packages.append(package)
-    config["tool"]["setuptools"]["packages"] = new_packages
-
-# Overwrite the original pyproject.toml
 with open("pyproject.toml", "wb") as f:
     tomli_w.dump(config, f)
-
-long_description = """
-PostHog is developer-friendly, self-hosted product analytics.
-posthog-python is the python package.
-
-This package requires Python 3.10 or higher.
-"""
-
-# Minimal setup.py for backward compatibility
-# Most configuration is now in pyproject.toml
-setup(
-    name="posthoganalytics",
-    version=VERSION,
-    # Basic fields for backward compatibility
-    url="https://github.com/posthog/posthog-python",
-    author="Posthog",
-    author_email="hey@posthog.com",
-    maintainer="PostHog",
-    maintainer_email="hey@posthog.com",
-    license="MIT License",
-    description="Integrate PostHog into any python application.",
-    long_description=long_description,
-    # This will fallback to pyproject.toml for detailed configuration
-)

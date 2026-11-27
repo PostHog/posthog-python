@@ -5,6 +5,7 @@ from posthog.contexts import (
     get_tags,
 )
 import unittest
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 import asyncio
 from parameterized import parameterized
@@ -866,6 +867,55 @@ class TestPosthogContextMiddlewareHybrid(unittest.TestCase):
         # Should NOT be a coroutine
         self.assertFalse(asyncio.iscoroutine(result))
         self.assertEqual(result, mock_response)
+
+
+class TestCoroutineDetectionWithoutAsgiref(unittest.TestCase):
+    @contextmanager
+    def _load_fallback(self):
+        import builtins
+        import importlib
+        import warnings
+
+        import posthog.integrations.django as module
+
+        real_import = builtins.__import__
+
+        def import_without_asgiref(name, *args, **kwargs):
+            if name.startswith("asgiref"):
+                raise ImportError(name)
+            return real_import(name, *args, **kwargs)
+
+        self.addCleanup(importlib.reload, module)
+        # Python 3.14 warns when asyncio.iscoroutinefunction is called, not when
+        # it is imported, so the filter must stay active during the calls.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with patch("builtins.__import__", side_effect=import_without_asgiref):
+                iscoroutinefunction = importlib.reload(module).iscoroutinefunction
+            yield iscoroutinefunction
+
+    def test_detects_async_functions(self):
+        async def view(request):
+            return request
+
+        with self._load_fallback() as iscoroutinefunction:
+            self.assertTrue(iscoroutinefunction(view))
+            self.assertFalse(iscoroutinefunction(lambda request: request))
+
+    def test_detects_callables_marked_by_legacy_asgiref(self):
+        marker = getattr(asyncio.coroutines, "_is_coroutine", None)
+        if marker is None:
+            self.skipTest("this Python has no legacy coroutine marker")
+
+        class Handler:
+            def __call__(self, request):
+                return request
+
+        handler = Handler()
+        handler._is_coroutine = marker
+
+        with self._load_fallback() as iscoroutinefunction:
+            self.assertTrue(iscoroutinefunction(handler))
 
 
 if __name__ == "__main__":

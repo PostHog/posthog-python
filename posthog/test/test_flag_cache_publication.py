@@ -11,6 +11,17 @@ from posthog.test.test_property_matching_version import definitions, evaluate
 from posthog.test.test_utils import FAKE_TEST_API_KEY, FakeRedis
 from posthog.utils import FlagCache, FlagCacheEntry, RedisFlagCache
 
+# This module covers the legacy single-flag getters; warning emission itself is
+# asserted in test_evaluate_flags.py.
+pytestmark = [
+    pytest.mark.filterwarnings(
+        r"ignore:`(feature_enabled|get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
+    ),
+    pytest.mark.filterwarnings(
+        r"ignore:send_feature_flag_events is deprecated in get_feature_flag_payload:DeprecationWarning"
+    ),
+]
+
 
 @pytest.fixture(params=["memory", "redis"])
 def client(request):

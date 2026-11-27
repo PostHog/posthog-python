@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -33,6 +34,13 @@ from posthog import Posthog
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / ".venv-benchmark/bin/python"
+
+
+def setUpModule():
+    # The suite measures the legacy single-flag getter on purpose.
+    warnings.filterwarnings(
+        "ignore", r"`get_feature_flag` is deprecated", DeprecationWarning
+    )
 
 
 class BenchmarksTest(unittest.TestCase):
