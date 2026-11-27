@@ -772,6 +772,76 @@ class TestClient(unittest.TestCase):
             self.assertEqual(event["properties"]["$trace_id"], expected_trace_id)
             self.assertEqual(event["properties"]["$span_id"], expected_span_id)
 
+    @parameterized.expand(
+        [
+            ("sampled", TraceFlags.SAMPLED, True),
+            ("not_sampled", TraceFlags.DEFAULT, False),
+        ]
+    )
+    def test_capture_exception_marks_whether_the_trace_was_sampled(
+        self, _, trace_flags, expected_sampled
+    ):
+        span_context = SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags(trace_flags),
+        )
+
+        with (
+            patch_capture_send("client") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            client.capture_exception(Exception("test exception"))
+
+        properties = sent_batch(mock_post)[0]["properties"]
+        self.assertEqual(properties["$trace_id"], "00000000000000000000000000000123")
+        self.assertIs(properties["$trace_sampled"], expected_sampled)
+
+    def test_capture_exception_explicit_trace_id_skips_trace_sampled(self):
+        span_context = SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            patch_capture_send("client") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            client.capture_exception(
+                Exception("test exception"), properties={"$trace_id": "custom-trace"}
+            )
+
+        properties = sent_batch(mock_post)[0]["properties"]
+        self.assertEqual(properties["$trace_id"], "custom-trace")
+        self.assertNotIn("$trace_sampled", properties)
+
+    def test_capture_exception_caller_trace_sampled_keeps_automatic_ids(self):
+        span_context = SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+
+        with (
+            patch_capture_send("client") as mock_post,
+            use_span(NonRecordingSpan(span_context)),
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+            client.capture_exception(
+                Exception("test exception"), properties={"$trace_sampled": False}
+            )
+
+        properties = sent_batch(mock_post)[0]["properties"]
+        self.assertEqual(properties["$trace_id"], "00000000000000000000000000000123")
+        self.assertEqual(properties["$span_id"], "0000000000000456")
+        self.assertIs(properties["$trace_sampled"], False)
+
     @parameterized.expand([("capture",), ("capture_ai",)])
     def test_capture_does_not_attach_otel_span_context_by_default(self, entrypoint):
         span_context = SpanContext(

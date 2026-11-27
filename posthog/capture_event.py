@@ -228,6 +228,10 @@ def _build_event_defaults(
     )
 
 
+# Only these two keys point at a span, so only they suppress the SDK's ids.
+_TRACE_ID_PROPERTIES = ("$trace_id", "$span_id")
+
+
 def _fill_event_defaults(
     msg: dict[str, Any], defaults: Optional[_EventDefaults]
 ) -> None:
@@ -273,10 +277,13 @@ def _fill_event_defaults(
             ):
                 properties[key] = {**_clean(dict(value)), **existing}
     # A trace id and a span id from different spans would point at no real span,
-    # so a value for either key from any layer keeps out both of the SDK's ids.
+    # so a value for either key from any layer keeps out all of the SDK's trace
+    # properties. A caller-set `$trace_sampled` alone keeps its value.
     trace_properties = defaults.trace_properties or {}
-    if not any(key in properties for key in trace_properties):
+    if not any(key in properties for key in _TRACE_ID_PROPERTIES):
         for key, value in trace_properties.items():
+            if key in properties:
+                continue
             if allowlist is None or key in allowlist:
                 properties[key] = _clean(value)
     if defaults.library is not None:
