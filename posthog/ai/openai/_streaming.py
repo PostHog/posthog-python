@@ -66,8 +66,11 @@ class _ResponsesStreamState:
     def _record_response_metadata(self, response: Any) -> None:
         if response and self.model is None and hasattr(response, "model"):
             self.model = response.model
-        if response and self.service_tier is None:
-            self.service_tier = getattr(response, "service_tier", None)
+        # response.created and response.in_progress echo the requested tier
+        # (e.g. "auto"); the terminal response names the tier that served it.
+        service_tier = getattr(response, "service_tier", None) if response else None
+        if service_tier is not None:
+            self.service_tier = service_tier
 
 
 @dataclass

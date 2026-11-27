@@ -3261,6 +3261,87 @@ def test_streaming_state_tracks_served_service_tier():
     assert responses_state.service_tier == "flex"
 
 
+def _responses_stream_with_tiers():
+    """A Responses stream as OpenAI sends it for ``service_tier="auto"``: the
+    created and in_progress events echo the requested tier, and only the
+    terminal response names the tier that served the request."""
+    from types import SimpleNamespace
+
+    def event(type_, service_tier, status, usage=None, output=None):
+        return SimpleNamespace(
+            type=type_,
+            response=SimpleNamespace(
+                model="gpt-4o-mini",
+                service_tier=service_tier,
+                status=status,
+                usage=usage,
+                output=output or [],
+                incomplete_details=None,
+            ),
+        )
+
+    return [
+        event("response.created", "auto", "in_progress"),
+        event("response.in_progress", "auto", "in_progress"),
+        event(
+            "response.completed",
+            "default",
+            "completed",
+            usage=make_response_usage(
+                input_tokens=20, output_tokens=10, total_tokens=30
+            ),
+        ),
+    ]
+
+
+def test_streaming_responses_reports_tier_from_terminal_response(mock_client):
+    with patch("openai.resources.responses.Responses.create") as mock_create:
+        mock_create.return_value = iter(_responses_stream_with_tiers())
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        list(
+            client.responses.create(
+                model="gpt-4o-mini",
+                input="Hello",
+                service_tier="auto",
+                stream=True,
+                posthog_distinct_id="test-id",
+            )
+        )
+
+    props = mock_client.capture_ai.call_args[1]["properties"]
+    assert props["$ai_service_tier"] == "default"
+    assert props["$ai_model_parameters"]["service_tier"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_responses_reports_tier_from_terminal_response(
+    mock_client,
+):
+    async def mock_create(self, **kwargs):
+        async def events():
+            for event in _responses_stream_with_tiers():
+                yield event
+
+        return events()
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        stream = await client.responses.create(
+            model="gpt-4o-mini",
+            input="Hello",
+            service_tier="auto",
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+        async for _ in stream:
+            pass
+
+    props = mock_client.capture_ai.call_args[1]["properties"]
+    assert props["$ai_service_tier"] == "default"
+    assert props["$ai_model_parameters"]["service_tier"] == "default"
+
+
 def _options_chat_completion():
     return ChatCompletion(
         id="test",
