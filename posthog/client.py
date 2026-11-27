@@ -54,6 +54,10 @@ from posthog.tracing._otlp import host_resource_attributes
 from posthog.tracing._pipeline import PostHogTraces
 from posthog.tracing.span import Span
 from posthog.tracing._span import inert_span as _inert_span
+from posthog.ai_trace_sample_rate import (
+    _resolve_ai_trace_sample_rate,
+    _sample_ai_trace_event,
+)
 from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_ai_compression,
@@ -188,6 +192,7 @@ from queue import Empty, Full, Queue
 
 
 _configure_posthog_logging()
+
 
 MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
@@ -1226,6 +1231,7 @@ class Client(object):
         email_request_timeout_seconds: float = 15,
         email_request_max_retries: int = 2,
         migrated_from: Optional[str] = None,
+        ai_trace_sample_rate: Optional[float] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -1294,6 +1300,17 @@ class Client(object):
                 Set to 0 when a job runner already retries the send.
             migrated_from: The email provider you moved from, such as
                 ``"resend"``. ``emails`` sends it with every request.
+            ai_trace_sample_rate: Optional sample rate between 0.0 and 1.0 for
+                AI observability events (``$ai_*``). Events carrying an
+                ``$ai_trace_id`` are sampled by trace id using 32-bit FNV-1a
+                with Murmur3 fmix32 hashing so that entire traces are either
+                kept or dropped together. Kept events gain an
+                ``$ai_trace_sample_rate`` property. Unset or 1.0 means no
+                sampling. Can also be set via the
+                ``POSTHOG_AI_TRACE_SAMPLE_RATE`` environment variable. Applies
+                to events captured through ``Client`` (``capture()``,
+                ``capture_ai()``, and provider wrappers); does not apply to
+                ``posthog.ai.otel``, which exports spans directly via OTLP.
             super_properties: Properties for every captured event. They fill
                 only keys the event leaves unset, before ``before_send`` runs.
                 ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill
@@ -1603,6 +1620,9 @@ class Client(object):
             else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
         )
         self.in_app_modules = in_app_modules
+        self.ai_trace_sample_rate = _resolve_ai_trace_sample_rate(
+            ai_trace_sample_rate, self.log
+        )
 
         if project_root is None:
             try:
@@ -2399,8 +2419,8 @@ class Client(object):
 
         Takes the same arguments and returns the same value as `capture()`:
         the event UUID, or None when the event was not admitted (disabled
-        client, or dropped by `before_send`). The event is queued on an
-        isolated AI lane with its own consumer pool and a higher per-event
+        client, dropped by `ai_trace_sample_rate`, or dropped by `before_send`).
+        The event is queued on an isolated AI lane with its own consumer pool and a higher per-event
         size cap, posting to the dedicated AI ingestion endpoint. The payload
         is sent as given — no redaction or truncation is applied here.
 
@@ -3253,6 +3273,9 @@ class Client(object):
         msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
 
         msg = clean(msg)
+
+        if not _sample_ai_trace_event(msg, self.ai_trace_sample_rate, self.log):
+            return None
 
         if self.before_send:
             event_name = msg.get("event")

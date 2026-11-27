@@ -627,8 +627,8 @@ def capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[st
     batching, endpoint) may change without notice.
 
     Takes the same arguments and returns the same value as `capture()`: the
-    event UUID, or None when the event was not admitted (disabled client, or
-    dropped by `before_send`). The event is delivered on an isolated queue
+    event UUID, or None when the event was not admitted (disabled client,
+    dropped by `ai_trace_sample_rate`, or dropped by `before_send`). The event is delivered on an isolated queue
     with its own consumer pool and a higher per-event size cap, posting to
     the dedicated AI ingestion endpoint. The payload is sent as given — no
     redaction or truncation is applied here.
