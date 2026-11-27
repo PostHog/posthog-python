@@ -222,9 +222,9 @@ def test_failed_or_not_modified_refresh_preserves_version(client, refresh):
 
 def test_in_flight_full_evaluation_keeps_matching_snapshot(client):
     client._update_flag_state(definitions(1))
-    from posthog import client as client_module
+    from posthog import feature_flags as feature_flags_module
 
-    original = client_module.match_feature_flag_properties
+    original = feature_flags_module.match_feature_flag_properties
     calls = 0
 
     def reload_during_evaluation(*args, **kwargs):
@@ -235,7 +235,7 @@ def test_in_flight_full_evaluation_keeps_matching_snapshot(client):
         return original(*args, **kwargs)
 
     with mock.patch(
-        "posthog.client.match_feature_flag_properties",
+        "posthog.feature_flags.match_feature_flag_properties",
         side_effect=reload_during_evaluation,
     ):
         result, fallback, _ = client._get_all_flags_and_payloads_locally(
@@ -308,8 +308,8 @@ def test_in_flight_payload_keeps_matching_snapshot(client, refresh, api, overrid
         ),
         mock.patch.object(
             client.flag_cache,
-            "set_cached_flag",
-            wraps=client.flag_cache.set_cached_flag,
+            "_set_cached_flag",
+            wraps=client.flag_cache._set_cached_flag,
         ) as cache_write,
     ):
         if api == "result":
@@ -476,16 +476,16 @@ def test_lazy_loading_caches_first_local_result_for_outage_fallback(
 
 def test_in_flight_result_is_not_cached_in_new_generation(client):
     client._update_flag_state(definitions(1))
-    from posthog import client as client_module
+    from posthog import feature_flags as feature_flags_module
 
-    original = client_module.match_feature_flag_properties
+    original = feature_flags_module.match_feature_flag_properties
 
     def reload_during_evaluation(*args, **kwargs):
         client._update_flag_state(definitions(2))
         return original(*args, **kwargs)
 
     with mock.patch(
-        "posthog.client.match_feature_flag_properties",
+        "posthog.feature_flags.match_feature_flag_properties",
         side_effect=reload_during_evaluation,
     ):
         assert evaluate(client) is True

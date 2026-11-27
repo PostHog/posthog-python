@@ -144,16 +144,16 @@ def test_old_worker_write_is_not_accepted_by_current_worker(workers, change):
 def test_refresh_during_evaluation_cannot_relabel_result(workers, change):
     client = workers()
     load(client, definitions(1))
-    from posthog import client as client_module
+    from posthog import feature_flags as feature_flags_module
 
-    original = client_module.match_feature_flag_properties
+    original = feature_flags_module.match_feature_flag_properties
 
     def refresh(*args, **kwargs):
         load(client, changed_definitions(change))
         return original(*args, **kwargs)
 
     with mock.patch(
-        "posthog.client.match_feature_flag_properties", side_effect=refresh
+        "posthog.feature_flags.match_feature_flag_properties", side_effect=refresh
     ):
         assert evaluate(client).get_value() is True
     assert fallback(client) is None

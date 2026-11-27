@@ -230,7 +230,7 @@ class TestClient(unittest.TestCase):
 
     def test_message_only_info_logs_include_posthog_prefix(self):
         self.client.flag_cache = mock.Mock()
-        self.client.flag_cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+        self.client.flag_cache._get_stale_cached_flag.return_value = FeatureFlagResult(
             key="flag-key", enabled=True, variant=None, payload=None, reason=None
         )
 

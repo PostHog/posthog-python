@@ -1,16 +1,18 @@
 import calendar
 import datetime
 import hashlib
+import itertools
 import json
 import logging
 import math
 import numbers
 import re
 import warnings
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from enum import Enum
 from functools import lru_cache as _lru_cache
-from typing import NamedTuple, NoReturn, Optional
+from typing import Any, NamedTuple, NoReturn, Optional
 
 from posthog import utils as utils
 from posthog.types import FlagValue, UnresolvedFlagReason
@@ -28,6 +30,169 @@ log = logging.getLogger("posthog")
 _warned_malformed_flag_dependencies: set = set()
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
+# The flags service rejects longer known-absent key lists with HTTP 400.
+_MAX_KNOWN_ABSENT_KEYS = 1000
+_PERSON_METADATA_KEY_PREFIX = "__posthog_person_metadata__"
+
+# For a known-absent key these operators match, and every other operator does not.
+_KNOWN_ABSENT_MATCHING_OPERATORS = frozenset(
+    (
+        "is_not_set",
+        "is_not",
+        "not_icontains",
+        "not_starts_with",
+        "not_ends_with",
+        "not_regex",
+    )
+)
+
+
+_NOT_SUPPLIED = object()
+
+
+class _KnownAbsent:
+    """Value of a property the caller listed as known absent, in the property maps
+    used for local evaluation.
+
+    Only a filter on the listing's own properties reads the key as absent: a
+    ``person`` filter (or one without a type) for a person listing, and a
+    ``group`` filter of the same group type for a group listing. A ``group``
+    filter without a group type reads
+    the condition's group type, whose properties are the map it is evaluated
+    against, at the top level of a condition and in its cohorts alike. Any other
+    filter reads the value the listing replaced, as if the key were not listed.
+    """
+
+    __slots__ = ("filter_type", "group_type_index", "replaced_value")
+
+    def __init__(
+        self,
+        filter_type: str,
+        group_type_index: Optional[str],
+        replaced_value: Any,
+    ):
+        self.filter_type = filter_type
+        self.group_type_index = group_type_index
+        self.replaced_value = replaced_value
+
+    def applies_to(self, prop) -> bool:
+        filter_type = prop.get("type")
+        if filter_type in (None, ""):
+            # Older definitions omit the type of a person property filter.
+            filter_type = "person"
+        if filter_type != self.filter_type:
+            return False
+        if self.filter_type == "person":
+            return True
+        filter_group_type_index = prop.get("group_type_index")
+        if filter_group_type_index is None:
+            return True
+        return self.group_type_index is not None and self.group_type_index == str(
+            filter_group_type_index
+        )
+
+    def __repr__(self) -> str:
+        return "<known absent>"
+
+
+def _supplied_value(property_values, key, prop) -> Any:
+    """Return the value local evaluation reads for ``prop``: a ``_KnownAbsent``
+    when the listing applies to it, else the supplied value or ``_NOT_SUPPLIED``."""
+    value = property_values.get(key, _NOT_SUPPLIED)
+    if isinstance(value, _KnownAbsent) and not value.applies_to(prop):
+        return value.replaced_value
+    return value
+
+
+def _known_absent_key_list(keys, field: str) -> Optional[list[str]]:
+    if keys is None:
+        return None
+    # A mapping is iterable, so check for it to catch a property map passed by
+    # mistake. A dict's .keys() view is not a mapping and is accepted.
+    if isinstance(keys, (str, bytes, bytearray, Mapping)) or not isinstance(
+        keys, Iterable
+    ):
+        raise TypeError(f"{field} must be a collection of strings")
+    # Read one key past the limit so an unbounded iterable can't exhaust memory.
+    key_list = list(itertools.islice(keys, _MAX_KNOWN_ABSENT_KEYS + 1))
+    if len(key_list) > _MAX_KNOWN_ABSENT_KEYS:
+        raise ValueError(
+            f"{field} allows at most {_MAX_KNOWN_ABSENT_KEYS} keys, got more"
+        )
+    if not all(isinstance(key, str) for key in key_list):
+        raise TypeError(f"{field} must contain only strings")
+    return key_list or None
+
+
+def _validate_known_absent_keys(
+    person_property_keys_known_absent: Optional[Iterable[str]],
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]],
+) -> tuple[Optional[list[str]], Optional[dict[str, list[str]]]]:
+    """Check the caller's known-absent keys against the flags service limits.
+
+    Returns them as lists, with ``None`` for anything empty. Raises ``TypeError``
+    for a wrong type and ``ValueError`` for a list over the limit, so nothing is
+    evaluated or sent. Lists are never truncated.
+    """
+    person_keys = _known_absent_key_list(
+        person_property_keys_known_absent, "person_property_keys_known_absent"
+    )
+    if group_property_keys_known_absent is None:
+        return person_keys, None
+    if not isinstance(group_property_keys_known_absent, Mapping):
+        raise TypeError(
+            "group_property_keys_known_absent must map group types to collections of strings"
+        )
+    group_keys: dict[str, list[str]] = {}
+    for group_type, keys in group_property_keys_known_absent.items():
+        if not isinstance(group_type, str) or keys is None:
+            raise TypeError(
+                "group_property_keys_known_absent must map group types to collections of strings"
+            )
+        key_list = _known_absent_key_list(
+            keys, f"group_property_keys_known_absent[{group_type!r}]"
+        )
+        if key_list:
+            group_keys[group_type] = key_list
+    return person_keys, group_keys or None
+
+
+def _mark_known_absent_properties(
+    person_properties: dict[str, Any],
+    group_properties: dict[str, dict[str, Any]],
+    person_property_keys_known_absent: Optional[list[str]],
+    group_property_keys_known_absent: Optional[dict[str, list[str]]],
+    group_type_mapping: Optional[Mapping[str, str]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return copies of the local evaluation property maps with each listed key
+    set to a ``_KnownAbsent`` that keeps the supplied or SDK-added value.
+
+    Each key is marked once, so a repeated key can't wrap its own marker."""
+    if person_property_keys_known_absent:
+        person_properties = dict(person_properties)
+        for key in dict.fromkeys(person_property_keys_known_absent):
+            # Known absence never hides a persons-table field.
+            if not key.startswith(_PERSON_METADATA_KEY_PREFIX):
+                person_properties[key] = _KnownAbsent(
+                    "person", None, person_properties.get(key, _NOT_SUPPLIED)
+                )
+    if group_property_keys_known_absent:
+        group_type_indexes = {
+            group_type: index
+            for index, group_type in (group_type_mapping or {}).items()
+        }
+        group_properties = dict(group_properties)
+        for group_type, keys in group_property_keys_known_absent.items():
+            properties = dict(group_properties.get(group_type) or {})
+            for key in dict.fromkeys(keys):
+                properties[key] = _KnownAbsent(
+                    "group",
+                    group_type_indexes.get(group_type),
+                    properties.get(key, _NOT_SUPPLIED),
+                )
+            group_properties[group_type] = properties
+    return person_properties, group_properties
 
 
 def _warn_malformed_flag_dependency_once(flag_key, reason):
@@ -179,22 +344,32 @@ def _get_holdout_variant(flag, bucketing_value) -> Optional[str]:
     Mirrors the server's evaluation order: a held-out value never reaches the flag's
     release conditions, so callers check this before matching any condition.
     """
+    percentage = _holdout_exclusion_percentage(flag)
+    if percentage is None:
+        return None
+
+    # The server treats 100 as "everyone" without hashing, so a 100% holdout can't
+    # miss on a hash boundary.
+    if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
+        return None
+
+    return f"holdout-{flag['filters']['holdout']['id']}"
+
+
+def _holdout_exclusion_percentage(flag) -> Optional[float]:
+    """The flag's holdout exclusion percentage, or None without a holdout.
+
+    The server clamps out-of-range percentages rather than rejecting them.
+    """
     holdout = (flag.get("filters") or {}).get("holdout")
     if not holdout:
         return None
 
     exclusion_percentage = holdout.get("exclusion_percentage")
-    holdout_id = holdout.get("id")
-    if exclusion_percentage is None or holdout_id is None:
+    if exclusion_percentage is None or holdout.get("id") is None:
         return None
 
-    # The server clamps out-of-range percentages rather than rejecting them, and treats
-    # 100 as "everyone" without hashing, so a 100% holdout can't miss on a hash boundary.
-    percentage = min(max(float(exclusion_percentage), 0.0), 100.0)
-    if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
-        return None
-
-    return f"holdout-{holdout_id}"
+    return min(max(float(exclusion_percentage), 0.0), 100.0)
 
 
 def get_matching_variant(flag, bucketing_value):
@@ -243,6 +418,8 @@ def evaluate_flag_dependency(
     cohort_properties,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ):
     """
     Evaluate a flag dependency condition under local evaluation.
@@ -253,6 +430,10 @@ def evaluate_flag_dependency(
     against the condition's expected value; ancestors influence it only through
     the referenced flag's own recursive evaluation.
 
+    The referenced flag is evaluated as if it were evaluated directly with the
+    top-level inputs in ``_evaluation_context``, using its own aggregation, property
+    context and bucketing identifier, as the flags service does.
+
     Args:
         property: Flag property with type="flag" and dependency_chain
         flags_by_key: Dictionary of all flags by their key
@@ -261,6 +442,9 @@ def evaluate_flag_dependency(
         properties: Person properties for evaluation
         cohort_properties: Cohort properties for evaluation
         device_id: The device ID for bucketing (optional)
+        _evaluation_context: The top-level inputs of the evaluation. Without it,
+            the referenced flag reads ``properties`` as person properties and no
+            groups.
 
     Returns:
         bool: Whether the referenced flag's evaluated value matches the
@@ -297,14 +481,21 @@ def evaluate_flag_dependency(
     _assert_dependency_definitions_loaded(
         dependency_chain, flags_by_key, evaluation_cache
     )
+    if _evaluation_context is None:
+        _evaluation_context = _FlagEvaluationContext(
+            distinct_id=distinct_id,
+            groups={},
+            person_properties=properties,
+            group_properties={},
+            group_type_mapping={},
+            device_id=device_id,
+        )
     _evaluate_dependency_chain(
         dependency_chain,
         flags_by_key,
         evaluation_cache,
-        distinct_id,
-        properties,
+        _evaluation_context,
         cohort_properties,
-        device_id,
         property_matching_version,
     )
 
@@ -381,10 +572,8 @@ def _evaluate_dependency_chain(
     dependency_chain,
     flags_by_key,
     evaluation_cache,
-    distinct_id,
-    properties,
+    _evaluation_context: "_FlagEvaluationContext",
     cohort_properties,
-    device_id,
     property_matching_version,
 ):
     # Evaluate and cache each flag in the chain; members already cached are
@@ -396,10 +585,8 @@ def _evaluate_dependency_chain(
             dep_flag_key,
             flags_by_key,
             evaluation_cache,
-            distinct_id,
-            properties,
+            _evaluation_context,
             cohort_properties,
-            device_id,
             property_matching_version,
         )
 
@@ -408,16 +595,14 @@ def _evaluate_dependency(
     dep_flag_key,
     flags_by_key,
     evaluation_cache,
-    distinct_id,
-    properties,
+    _evaluation_context: "_FlagEvaluationContext",
     cohort_properties,
-    device_id,
     property_matching_version,
 ):
     dep_flag = flags_by_key[dep_flag_key]
 
-    # Same order as client._compute_flag_locally: an inactive flag is false
-    # whatever its experience continuity setting.
+    # Same order as _compute_flag_locally: an inactive flag is false whatever its
+    # experience continuity setting.
     if not dep_flag.get("active"):
         evaluation_cache[dep_flag_key] = False
         return
@@ -429,30 +614,17 @@ def _evaluate_dependency(
             reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
         )
 
-    # Recursively evaluate the dependency
+    # Evaluate the dependency as if it were evaluated directly with the same
+    # inputs, so it reads its own aggregation's properties and bucketing value.
     try:
-        dep_flag_filters = dep_flag.get("filters") or {}
-        dep_aggregation_group_type_index = dep_flag_filters.get(
-            "aggregation_group_type_index"
-        )
-        if dep_aggregation_group_type_index is not None:
-            # Group flags should continue bucketing by the group key
-            # from the current evaluation context.
-            dep_bucketing_value = distinct_id
-        else:
-            dep_bucketing_value = resolve_bucketing_value(
-                dep_flag, distinct_id, device_id
-            )
-        dep_result = match_feature_flag_properties(
+        dep_result = _compute_flag_locally(
             dep_flag,
-            distinct_id,
-            properties,
+            _evaluation_context,
             cohort_properties=cohort_properties,
             flags_by_key=flags_by_key,
-            evaluation_cache=evaluation_cache,
-            device_id=device_id,
             property_matching_version=property_matching_version,
-            bucketing_value=dep_bucketing_value,
+            evaluation_cache=evaluation_cache,
+            warn_on_unknown_groups=False,
         )
         evaluation_cache[dep_flag_key] = dep_result
     except RequiresServerEvaluation as e:
@@ -529,6 +701,143 @@ def resolve_bucketing_value(flag, distinct_id, device_id=None):
     return distinct_id
 
 
+class _FlagEvaluationContext(NamedTuple):
+    """The top-level inputs of a local flag evaluation. A flag dependency is
+    evaluated from them as if it were evaluated directly."""
+
+    distinct_id: Any
+    groups: Mapping[str, Any]
+    person_properties: dict[str, Any]
+    group_properties: dict[str, dict[str, Any]]
+    group_type_mapping: Mapping[str, str]
+    device_id: Optional[str]
+
+
+def _compute_flag_locally(
+    flag,
+    _evaluation_context: _FlagEvaluationContext,
+    *,
+    cohort_properties,
+    flags_by_key,
+    property_matching_version: int,
+    evaluation_cache: dict[str, Optional[FlagValue]],
+    warn_on_unknown_groups: bool,
+) -> FlagValue:
+    """Evaluate ``flag`` locally with its own aggregation, property context and
+    bucketing value."""
+    if not flag.get("active"):
+        return False
+
+    if flag.get("ensure_experience_continuity", False):
+        raise InconclusiveMatchError(
+            "Flag has experience continuity enabled",
+            reason=UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+        )
+
+    distinct_id = _evaluation_context.distinct_id
+    groups = _evaluation_context.groups
+    group_properties = _evaluation_context.group_properties
+    group_type_mapping = _evaluation_context.group_type_mapping
+    device_id = _evaluation_context.device_id
+    flag_filters = flag.get("filters") or {}
+    aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+
+    if aggregation_group_type_index is not None:
+        group_name = group_type_mapping.get(str(aggregation_group_type_index))
+
+        if not group_name:
+            log.warning(
+                f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {flag['key']}"
+            )
+            # failover to `/flags`
+            raise InconclusiveMatchError(
+                "Flag has unknown group type index",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
+
+        if not _is_usable_group_key(groups.get(group_name)):
+            # The server would hash an empty group key for the holdout, so a
+            # holdout that can exclude anyone needs the group key.
+            if (_holdout_exclusion_percentage(flag) or 0.0) > 0.0:
+                raise InconclusiveMatchError(
+                    f"Group flag {flag['key']} has a holdout and no group key was passed",
+                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
+                )
+            # Conditions aggregated by this group are skipped; the flag's person
+            # conditions still run.
+            message = f"[FEATURE FLAGS] Skipping group conditions of feature flag {flag['key']} without a group key"
+            if warn_on_unknown_groups:
+                log.warning(message)
+            else:
+                log.debug(message)
+            # Like the server, the flag-level identifier is then an empty string.
+            return match_feature_flag_properties(
+                flag,
+                distinct_id,
+                {},
+                cohort_properties=cohort_properties,
+                flags_by_key=flags_by_key,
+                property_matching_version=property_matching_version,
+                evaluation_cache=evaluation_cache,
+                device_id=device_id,
+                bucketing_value="",
+                group_type_mapping=group_type_mapping,
+                groups=groups,
+                group_properties=group_properties,
+                _evaluation_context=_evaluation_context,
+            )
+
+        if group_name not in group_properties:
+            raise InconclusiveMatchError(
+                f"Flag has no group properties for group '{group_name}'",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
+            )
+        group_key = _group_key_to_string(groups[group_name])
+        return match_feature_flag_properties(
+            flag,
+            group_key,
+            group_properties[group_name],
+            cohort_properties=cohort_properties,
+            flags_by_key=flags_by_key,
+            property_matching_version=property_matching_version,
+            evaluation_cache=evaluation_cache,
+            device_id=device_id,
+            bucketing_value=group_key,
+            group_type_mapping=group_type_mapping,
+            groups=groups,
+            group_properties=group_properties,
+            _evaluation_context=_evaluation_context,
+        )
+
+    try:
+        bucketing_value = resolve_bucketing_value(flag, distinct_id, device_id)
+    except InconclusiveMatchError as e:
+        # No condition is checked without a bucketing value, so a cause in
+        # the definition also applies and outranks missing_context.
+        e.reason = (
+            _get_definition_unresolved_reason(
+                flag, flags_by_key, cohort_properties, group_type_mapping
+            )
+            or e.reason
+        )
+        raise
+    return match_feature_flag_properties(
+        flag,
+        distinct_id,
+        _evaluation_context.person_properties,
+        cohort_properties=cohort_properties,
+        flags_by_key=flags_by_key,
+        property_matching_version=property_matching_version,
+        evaluation_cache=evaluation_cache,
+        device_id=device_id,
+        bucketing_value=bucketing_value,
+        group_type_mapping=group_type_mapping,
+        groups=groups,
+        group_properties=group_properties,
+        _evaluation_context=_evaluation_context,
+    )
+
+
 def match_feature_flag_properties(
     flag,
     distinct_id,
@@ -543,6 +852,7 @@ def match_feature_flag_properties(
     groups=None,
     group_properties=None,
     property_matching_version: int = 1,
+    _evaluation_context=None,
 ) -> FlagValue:
     if bucketing_value is None:
         warnings.warn(
@@ -556,13 +866,25 @@ def match_feature_flag_properties(
     flag_filters = flag.get("filters") or {}
 
     if flag_filters.get("feature_enrollment") is True:
-        return _match_feature_enrollment(flag, flag_filters, properties)
+        enrolled = _match_feature_enrollment(flag, flag_filters, properties)
+        if enrolled is not None:
+            return enrolled
 
     # Holdouts are evaluated before release conditions, so a held-out value is excluded
     # from the flag's targeting entirely rather than being bucketed into a variant.
     holdout_variant = _get_holdout_variant(flag, bucketing_value)
     if holdout_variant is not None:
         return holdout_variant
+
+    if _evaluation_context is None:
+        _evaluation_context = _FlagEvaluationContext(
+            distinct_id=distinct_id,
+            groups=groups or {},
+            person_properties=properties,
+            group_properties=group_properties or {},
+            group_type_mapping=group_type_mapping or {},
+            device_id=device_id,
+        )
 
     return _match_flag_conditions(
         flag,
@@ -575,9 +897,10 @@ def match_feature_flag_properties(
         device_id,
         bucketing_value,
         group_type_mapping or {},
-        groups or {},
+        groups,
         group_properties or {},
         property_matching_version,
+        _evaluation_context,
     )
 
 
@@ -595,6 +918,7 @@ def _match_flag_conditions(
     groups,
     group_properties,
     property_matching_version,
+    _evaluation_context,
 ) -> FlagValue:
     flag_conditions = flag_filters.get("groups") or []
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
@@ -620,6 +944,7 @@ def _match_flag_conditions(
                 property_matching_version,
                 flag_aggregation,
                 valid_variant_keys,
+                _evaluation_context,
             )
         except RequiresServerEvaluation as e:
             _enrich_server_evaluation_reason(
@@ -668,41 +993,48 @@ def _get_condition_context(
     group_type_mapping,
     groups,
     group_properties,
+    _evaluation_context,
 ):
-    # Per-condition aggregation overrides only when the condition explicitly
-    # sets its own aggregation_group_type_index (mixed targeting).
-    # When absent, use the properties/bucketing already resolved by the caller.
+    """The properties and bucketing value a condition is matched with, or None
+    when the condition is skipped.
+
+    A condition uses its own aggregation_group_type_index when it has the key, an
+    explicit null meaning the person, and the flag-level aggregation otherwise.
+    ``properties`` and ``bucketing_value`` are the flag-level aggregation's.
+    """
     condition_aggregation = condition.get(
         "aggregation_group_type_index", flag_aggregation
     )
 
-    # Mixed-override path: condition-level aggregation differs from flag-level.
-    # This assumes flag-level aggregation is None for mixed flags.
-    if condition_aggregation != flag_aggregation:
-        if condition_aggregation is not None:
-            group_name = group_type_mapping.get(str(condition_aggregation))
-            if not group_name or group_name not in groups:
-                log.debug(
-                    "Skipping group condition for flag '%s': group type index %s not available",
-                    flag.get("key", ""),
-                    condition_aggregation,
-                )
-                return None
-            if group_name not in group_properties:
-                raise InconclusiveMatchError(
-                    "Group properties were not passed",
-                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
-                )
-            effective_properties = group_properties[group_name]
-            effective_bucketing = _group_key_to_string(groups[group_name])
-        else:
-            effective_properties = properties
-            effective_bucketing = bucketing_value
-    else:
-        effective_properties = properties
-        effective_bucketing = bucketing_value
+    if condition_aggregation is None:
+        if flag_aggregation is None:
+            return properties, bucketing_value
+        # A person condition of a group flag reads the person, not the group.
+        return _evaluation_context.person_properties, resolve_bucketing_value(
+            flag, _evaluation_context.distinct_id, _evaluation_context.device_id
+        )
 
-    return effective_properties, effective_bucketing
+    if groups is None and condition_aggregation == flag_aggregation:
+        # A direct caller that passes no groups passes the flag-level group's
+        # properties and bucketing value instead.
+        return properties, bucketing_value
+
+    group_name = group_type_mapping.get(str(condition_aggregation))
+    if not group_name or not _is_usable_group_key((groups or {}).get(group_name)):
+        log.debug(
+            "Skipping group condition for flag '%s': group type index %s not available",
+            flag.get("key", ""),
+            condition_aggregation,
+        )
+        return None
+    if condition_aggregation == flag_aggregation:
+        return properties, bucketing_value
+    if group_name not in group_properties:
+        raise InconclusiveMatchError(
+            "Group properties were not passed",
+            reason=UnresolvedFlagReason.MISSING_CONTEXT,
+        )
+    return group_properties[group_name], _group_key_to_string(groups[group_name])
 
 
 def _match_flag_condition(
@@ -721,6 +1053,7 @@ def _match_flag_condition(
     property_matching_version,
     flag_aggregation,
     valid_variant_keys,
+    _evaluation_context,
 ):
     context = _get_condition_context(
         flag,
@@ -731,6 +1064,7 @@ def _match_flag_condition(
         group_type_mapping,
         groups,
         group_properties,
+        _evaluation_context,
     )
     if context is None:
         return ConditionMatch.NO_MATCH, None
@@ -746,6 +1080,7 @@ def _match_flag_condition(
         bucketing_value=effective_bucketing,
         device_id=device_id,
         property_matching_version=property_matching_version,
+        _evaluation_context=_evaluation_context,
     )
     if match_result == ConditionMatch.MATCH:
         variant_override = condition.get("variant")
@@ -780,19 +1115,23 @@ def _get_valid_variant_keys(flag_filters):
     return [variant["key"] for variant in flag_variants]
 
 
-def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
+def _match_feature_enrollment(flag, flag_filters, properties) -> Optional[bool]:
+    """Return the enrollment value, or None when the person is known not to be
+    enrolled and evaluation continues to holdouts and release conditions."""
     enrollment_key = f"$feature_enrollment/{flag.get('key')}"
     if flag_filters.get("aggregation_group_type_index") is not None:
         raise InconclusiveMatchError(
             "Group flag has feature enrollment, which reads person properties",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
-    if enrollment_key not in properties:
+    enrollment = _supplied_value(properties, enrollment_key, {"type": "person"})
+    if isinstance(enrollment, _KnownAbsent):
+        return None
+    if enrollment is _NOT_SUPPLIED:
         raise InconclusiveMatchError(
             f"Flag has feature enrollment and '{enrollment_key}' was not passed",
             reason=UnresolvedFlagReason.MISSING_CONTEXT,
         )
-    enrollment = properties[enrollment_key]
     return enrollment is True or enrollment == "true"
 
 
@@ -822,6 +1161,7 @@ def _match_condition_filter(
     *,
     device_id,
     property_matching_version: int,
+    _evaluation_context,
 ) -> bool:
     property_type = prop.get("type")
     if property_type == "cohort":
@@ -834,6 +1174,7 @@ def _match_condition_filter(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
     if property_type == "flag":
         return evaluate_flag_dependency(
@@ -845,6 +1186,7 @@ def _match_condition_filter(
             cohort_properties,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
     _assert_property_filter_type_supported(prop)
     return match_property(prop, properties, property_matching_version)
@@ -862,6 +1204,7 @@ def is_condition_match(
     bucketing_value,
     device_id=None,
     property_matching_version: int = 1,
+    _evaluation_context=None,
 ) -> ConditionMatch:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
@@ -875,6 +1218,7 @@ def is_condition_match(
             evaluation_cache,
             device_id,
             property_matching_version,
+            _evaluation_context,
         ):
             return ConditionMatch.NO_MATCH
 
@@ -901,6 +1245,7 @@ def _match_condition_properties(
     evaluation_cache,
     device_id,
     property_matching_version,
+    _evaluation_context,
 ) -> bool:
     # Filters in a condition have no defined order, so an inconclusive filter does
     # not stop the loop: a later filter can still rule the condition out or carry a
@@ -918,6 +1263,7 @@ def _match_condition_properties(
                 distinct_id,
                 device_id=device_id,
                 property_matching_version=property_matching_version,
+                _evaluation_context=_evaluation_context,
             )
         except RequiresServerEvaluation as e:
             # Fall back to the server only when this is the first filter that could
@@ -1028,6 +1374,14 @@ def _json_object_to_string(value: dict, reason: UnresolvedFlagReason) -> str:
         for key in sorted(value)
     )
     return "{" + ",".join(items) + "}"
+
+
+def _is_usable_group_key(value) -> bool:
+    """A usable group key is a non-empty string or a number. Anything else,
+    including an omitted group type, counts as no group key."""
+    if isinstance(value, str):
+        return value != ""
+    return isinstance(value, numbers.Number) and not isinstance(value, bool)
 
 
 def _group_key_to_string(value) -> str:
@@ -1484,7 +1838,18 @@ def _match_property_value(
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
-    if key not in property_values:
+    override_value = _supplied_value(property_values, key, property)
+    if isinstance(override_value, _KnownAbsent):
+        # Like the flags service, resolve without parsing, compiling or
+        # validating a present condition value. A null value reads as omitted.
+        if value is None and operator not in ("is_set", "is_not_set"):
+            raise InconclusiveMatchError(
+                f"Operator {operator} has no condition value",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
+        return operator in _KNOWN_ABSENT_MATCHING_OPERATORS
+
+    if override_value is _NOT_SUPPLIED:
         raise InconclusiveMatchError(
             "can't match properties without a given property value",
             reason=UnresolvedFlagReason.MISSING_CONTEXT,
@@ -1492,8 +1857,6 @@ def _match_property_value(
 
     if operator in ("is_set", "is_not_set"):
         return operator == "is_set"
-
-    override_value = property_values[key]
 
     if operator in NUMERIC_OPERATORS:
         return _match_numeric_property(operator, value, override_value)
@@ -1674,6 +2037,8 @@ def match_cohort(
     distinct_id=None,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
@@ -1709,6 +2074,7 @@ def match_cohort(
         distinct_id,
         device_id=device_id,
         property_matching_version=property_matching_version,
+        _evaluation_context=_evaluation_context,
     )
     return not matches if operator == "not_in" else matches
 
@@ -1727,6 +2093,8 @@ def match_property_group(
     distinct_id=None,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ) -> bool:
     is_and, properties = _get_property_group_values(property_group)
     if not properties:
@@ -1746,6 +2114,7 @@ def match_property_group(
                 distinct_id,
                 device_id,
                 property_matching_version,
+                _evaluation_context,
             )
             if effective_match != is_and:
                 decisive_result = effective_match
@@ -1796,6 +2165,7 @@ def _match_property_group_entry(
     distinct_id,
     device_id,
     property_matching_version,
+    _evaluation_context,
 ):
     if not isinstance(prop, dict):
         raise RequiresServerEvaluation("Cohort property group entry must be an object")
@@ -1809,6 +2179,7 @@ def _match_property_group_entry(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
         negation = False
     else:
@@ -1821,6 +2192,7 @@ def _match_property_group_entry(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
         negation = prop.get("negation", False)
     return matches != bool(negation)

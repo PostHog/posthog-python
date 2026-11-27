@@ -1,5 +1,5 @@
 import datetime  # noqa: F401
-from typing import Any, Callable, Dict, Mapping, Optional, Union  # noqa: F401
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union  # noqa: F401
 
 from typing_extensions import Unpack
 
@@ -865,6 +865,9 @@ def feature_enabled(
     send_feature_flag_events: bool = True,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Optional[bool]:
     """
     Use feature flags to enable or disable features for users.
@@ -883,6 +886,10 @@ def feature_enabled(
         send_feature_flag_events: Whether to send feature flag events
         disable_geoip: Whether to disable GeoIP lookup
         device_id: Optional device ID override for experience-continuity flags
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Details:
         You can call `posthog.load_feature_flags()` before to make sure you're not doing unexpected requests.
@@ -909,6 +916,8 @@ def feature_enabled(
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -922,6 +931,9 @@ def get_feature_flag(
     send_feature_flag_events: bool = True,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Optional[FlagValue]:
     """
     Get feature flag variant for users. Used with experiments.
@@ -940,6 +952,10 @@ def get_feature_flag(
         send_feature_flag_events: Whether to send feature flag events
         disable_geoip: Whether to disable GeoIP lookup
         device_id: Optional device ID override for experience-continuity flags
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Details:
         `groups` are a mapping from group type to group key. So, if you have a group type of "organization" and a group key of "5", you would pass groups={"organization": "5"}. `group_properties` take the format: { group_type_name: { group_properties } }. So, for example, if you have the group type "organization" and the group key "5", with the properties name, and employee count, you'll send these as: group_properties={"organization": {"name": "PostHog", "employees": 11}}.
@@ -966,6 +982,8 @@ def get_feature_flag(
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -978,6 +996,9 @@ def get_all_flags(
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
     flag_keys_to_evaluate: Optional[list[str]] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Optional[dict[str, FlagValue]]:
     """
     Get all flags for a given user.
@@ -991,6 +1012,10 @@ def get_all_flags(
         disable_geoip: Whether to disable GeoIP lookup
         device_id: Optional device ID override for experience-continuity flags
         flag_keys_to_evaluate: Optional list of flag keys to evaluate (evaluates all if None)
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Details:
         Flags are key-value pairs where the key is the flag key and the value is the flag variant, or True, or False.
@@ -1014,6 +1039,8 @@ def get_all_flags(
         disable_geoip=disable_geoip,
         device_id=device_id,
         flag_keys_to_evaluate=flag_keys_to_evaluate,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -1027,6 +1054,9 @@ def get_feature_flag_result(
     send_feature_flag_events: bool = True,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Optional[FeatureFlagResult]:
     """
     Get a FeatureFlagResult object which contains the flag result and payload.
@@ -1048,6 +1078,10 @@ def get_feature_flag_result(
         send_feature_flag_events: Whether to send a $feature_flag_called event.
         disable_geoip: Whether to disable GeoIP lookup.
         device_id: Optional device ID override for experience-continuity flags.
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Example:
     ```python
@@ -1069,6 +1103,8 @@ def get_feature_flag_result(
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -1083,6 +1119,9 @@ def get_feature_flag_payload(
     send_feature_flag_events: bool = True,
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Optional[object]:
     """
     Get the payload associated with a feature flag value.
@@ -1101,6 +1140,10 @@ def get_feature_flag_payload(
         send_feature_flag_events: Whether to send a $feature_flag_called event.
         disable_geoip: Whether to disable GeoIP lookup.
         device_id: Optional device ID override for experience-continuity flags.
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Returns:
         The payload associated with the matched feature flag value, or None.
@@ -1122,6 +1165,8 @@ def get_feature_flag_payload(
         send_feature_flag_events=send_feature_flag_events,
         disable_geoip=disable_geoip,
         device_id=device_id,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -1154,6 +1199,9 @@ def get_all_flags_and_payloads(
     disable_geoip: Optional[bool] = None,
     device_id: Optional[str] = None,
     flag_keys_to_evaluate: Optional[list[str]] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> FlagsAndPayloads:
     """
     Get all feature flag values and payloads for a user.
@@ -1168,6 +1216,10 @@ def get_all_flags_and_payloads(
         device_id: Optional device ID override for experience-continuity flags.
         flag_keys_to_evaluate: Optional list of flag keys to evaluate. Evaluates
             all flags when omitted.
+        person_property_keys_known_absent: Person property keys known to be absent.
+            See ``evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. See ``evaluate_flags``.
 
     Returns:
         A dict with ``featureFlags`` and ``featureFlagPayloads`` entries.
@@ -1185,6 +1237,8 @@ def get_all_flags_and_payloads(
         disable_geoip=disable_geoip,
         device_id=device_id,
         flag_keys_to_evaluate=flag_keys_to_evaluate,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
@@ -1197,6 +1251,9 @@ def evaluate_flags(
     disable_geoip: Optional[bool] = None,
     flag_keys: Optional[list[str]] = None,
     device_id: Optional[str] = None,
+    *,
+    person_property_keys_known_absent: Optional[Iterable[str]] = None,
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> FeatureFlagEvaluations:
     """Evaluate all feature flags for a user in a single call and return a
     :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
@@ -1226,6 +1283,17 @@ def evaluate_flags(
         device_id: Optional device ID override. If not provided, falls back to the
             context device_id (which may be set via tracing headers). Used by
             experience-continuity flags to match users across distinct_id changes.
+        person_property_keys_known_absent: Person property keys the caller knows are
+            absent for this person. Local evaluation treats a listed key as absent,
+            even when ``person_properties`` supplies a value for it: ``is_not_set``
+            and the negated operators match, and every other operator does not, with
+            no remote fallback. A listed ``$feature_enrollment/<flag key>`` means not
+            enrolled. Keys starting with ``__posthog_person_metadata__`` are ignored.
+            Sent to ``/flags`` on remote evaluation. At most 1000 keys, counting
+            duplicates; a longer list raises ``ValueError`` and nothing is evaluated.
+        group_property_keys_known_absent: Group property keys known to be absent,
+            keyed by group type. A key applies only to its own group type. Same
+            rules and per-group-type limit as ``person_property_keys_known_absent``.
 
     Examples:
         ```python
@@ -1249,6 +1317,8 @@ def evaluate_flags(
         disable_geoip=disable_geoip,
         flag_keys=flag_keys,
         device_id=device_id,
+        person_property_keys_known_absent=person_property_keys_known_absent,
+        group_property_keys_known_absent=group_property_keys_known_absent,
     )
 
 
