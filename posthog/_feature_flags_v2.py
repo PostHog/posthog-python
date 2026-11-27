@@ -900,12 +900,12 @@ def _match_operator(
         return False
     if not present:
         return name in _OPERATORS_MATCHING_ABSENCE
+    _check_json_text(value)
     if name in _NUMBER_COMPARISONS:
         return _match_number(predicate, value)
     if name in _DATE_COMPARISONS:
         return _match_date(predicate, value, context)
     # The other operators compare the value's JSON text.
-    _check_json_text(value)
     if name in _EXACT_OPERATORS:
         matching_version = 2 if context.explicit_exact_matching else 1
         matched = _match_exact_property(predicate.value, value, matching_version)
@@ -924,10 +924,10 @@ def _match_operator(
 def _check_json_text(value: Any) -> None:
     """Decline a property value that the reference cannot hold as JSON.
 
-    These are a number beyond binary64 and a value nested deeper than the reference's
-    JSON reader reads. The version 1 helpers that write the JSON text would raise on
-    the extreme ones: an integer too long to write out, or nesting deeper than Python
-    recurses.
+    These are a number beyond binary64, a string or object key with a lone surrogate,
+    and a value nested deeper than the reference's JSON reader reads. The version 1
+    helpers that write the JSON text would raise on the extreme ones: an integer too
+    long to write out, or nesting deeper than Python recurses.
     """
     pending = [(value, 1)]
     while pending:
@@ -935,8 +935,10 @@ def _check_json_text(value: Any) -> None:
         if isinstance(item, (dict, list)):
             if depth > _MAX_JSON_DEPTH:
                 raise _unusable_context("A property value is nested too deeply")
-            children = item.values() if isinstance(item, dict) else item
+            children = (*item, *item.values()) if isinstance(item, dict) else item
             pending.extend((child, depth + 1) for child in children)
+        elif isinstance(item, str) and not _is_text(item):
+            raise _unusable_context("A property value is not valid Unicode text")
         elif _is_number(item) and not _is_json_scalar(item):
             raise _unusable_context("A property value is a number JSON cannot carry")
 
@@ -964,9 +966,10 @@ def _match_number(predicate: _Predicate, value: Any) -> bool:
 
 
 # The decimal numbers the reference reads from a string. Python's ``float`` also takes
-# surrounding whitespace and underscores.
+# surrounding whitespace and underscores. Fraction digits come only after the point:
+# two digit runs that could share digits would backtrack in quadratic time.
 _NUMBER_PATTERN = re.compile(
-    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
     re.IGNORECASE,
 )
 
@@ -981,12 +984,8 @@ def _to_number(value: Any) -> Optional[float]:
         raise _unusable_context(
             f"A property value of type {type(value).__name__} is not a JSON value"
         )
-    if isinstance(value, float) and not math.isfinite(value):
-        raise _unusable_context("A property value is not a finite number")
-    try:
-        return float(value)
-    except OverflowError:
-        raise _unusable_context("A property value is too large to compare") from None
+    # The caller checked that the number is finite binary64.
+    return float(value)
 
 
 # --- Semantic versions ---------------------------------------------------------------
