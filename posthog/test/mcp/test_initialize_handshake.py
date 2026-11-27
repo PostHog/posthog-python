@@ -60,14 +60,15 @@ def make_pod(
     stateless: bool = True,
     options: Optional[MCPAnalyticsOptions] = None,
     bind: bool = True,
+    register: Any = None,
 ):
     """One instrumented server of ``kind``, as ``(asgi_app, lifespan, server)``.
 
-    ``bind`` only matters for an mcp 1.x low-level server: nothing autowires it,
+    ``register`` adds more tools to a high-level server. ``bind`` only matters for an mcp 1.x low-level server: nothing autowires it,
     so the middleware is mounted by hand, with or without ``server=``."""
     options = options or MCPAnalyticsOptions(enable_conversation_id=False)
     if kind == "fastmcp":
-        return _fastmcp_pod(client, options, stateless)
+        return _fastmcp_pod(client, options, stateless, register)
     if kind == "lowlevel":
         return _lowlevel_pod(client, options, stateless, bind)
     if MCP_MAJOR < 2:
@@ -91,6 +92,8 @@ def make_pod(
     def add(a: int, b: int) -> int:
         return a + b
 
+    if register:
+        register(server)
     instrument(server, client, options)
     if MCP_MAJOR < 2:
         app = server.streamable_http_app()
@@ -99,7 +102,7 @@ def make_pod(
     return app, server.session_manager.run(), server
 
 
-def _fastmcp_pod(client, options, stateless):
+def _fastmcp_pod(client, options, stateless, register):
     fastmcp = pytest.importorskip("fastmcp")
 
     server = fastmcp.FastMCP("handshake")
@@ -108,6 +111,8 @@ def _fastmcp_pod(client, options, stateless):
     def add(a: int, b: int) -> int:
         return a + b
 
+    if register:
+        register(server)
     instrument(server, client, options)
     app = server.http_app(json_response=True, stateless_http=stateless)
     return app, app.router.lifespan_context(app), server
@@ -751,6 +756,23 @@ async def test_a_route_without_the_middleware_keeps_the_fallback():
     assert {c["properties"]["$session_id"] for c in calls} == {
         e["properties"]["$session_id"] for e in inits
     }
+
+
+async def test_handshake_session_id_keeps_its_public_contract():
+    from posthog.mcp._internal import MCPAnalyticsData
+    from posthog.mcp.asgi import handshake_session_id
+    from posthog.mcp.session import derive_session_id_from_mcp_session
+    from posthog.mcp.session_token import SessionTokenPayload
+
+    data = MCPAnalyticsData(options=MCPAnalyticsOptions())
+
+    assert await handshake_session_id(
+        data, "transport", None
+    ) == derive_session_id_from_mcp_session("transport")
+    assert (
+        await handshake_session_id(data, None, SessionTokenPayload(session_id="ses_t"))
+        == "ses_t"
+    )
 
 
 async def test_a_handshake_leaves_the_shared_session_alone():

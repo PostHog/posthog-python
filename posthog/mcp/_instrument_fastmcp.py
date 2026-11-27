@@ -159,46 +159,52 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await lifecycle.prime_session()
-
-        start = time.monotonic()
+        session = await lifecycle.prime_session()
         try:
-            result = await original(
-                name, call_arguments, context=context, convert_result=convert_result
-            )
-        except Exception as error:
-            if await lifecycle.record_if_unknown_tool(
-                _name_owned_by_real_tool(server, name)
-            ):
+            start = time.monotonic()
+            try:
+                with lifecycle.in_tool(session):
+                    result = await original(
+                        name,
+                        call_arguments,
+                        context=context,
+                        convert_result=convert_result,
+                    )
+            except Exception as error:
+                if await lifecycle.record_if_unknown_tool(
+                    _name_owned_by_real_tool(server, name)
+                ):
+                    raise
+                # The minted prompt-back was never delivered to the agent — don't stamp
+                # an orphan conversation_id it can't echo (an agent-supplied id is kept).
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
                 raise
-            # The minted prompt-back was never delivered to the agent — don't stamp
-            # an orphan conversation_id it can't echo (an agent-supplied id is kept).
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
-            raise
 
-        # Deliver the handle first, then capture the result the agent actually got.
-        # Two channels: mirrored into structuredContent on every response (for
-        # tools whose output schema we declared the key on — clients that read
-        # structuredContent never see the text block), and the prompt-back text
-        # block on the minting response only.
-        delivered = False
-        if lifecycle.conversation_id:
-            if data.tool_output_instructions.get(name):
-                result, delivered = mirror_instructions_into_structured_content(
-                    result, lifecycle.conversation_id
-                )
-            if lifecycle.minted_conversation_id:
-                injected = _inject_prompt_back(result, lifecycle.conversation_id)
-                if injected is not result:
-                    delivered = True
-                result = injected
+            # Deliver the handle first, then capture the result the agent actually got.
+            # Two channels: mirrored into structuredContent on every response (for
+            # tools whose output schema we declared the key on — clients that read
+            # structuredContent never see the text block), and the prompt-back text
+            # block on the minting response only.
+            delivered = False
+            if lifecycle.conversation_id:
+                if lifecycle.mirrors_output_instructions:
+                    result, delivered = mirror_instructions_into_structured_content(
+                        result, lifecycle.conversation_id
+                    )
+                if lifecycle.minted_conversation_id:
+                    injected = _inject_prompt_back(result, lifecycle.conversation_id)
+                    if injected is not result:
+                        delivered = True
+                    result = injected
 
-        await lifecycle.record_result(
-            result,
-            (time.monotonic() - start) * 1000,
-            conversation_id_delivered=delivered,
-        )
-        return result
+            await lifecycle.record_result(
+                result,
+                (time.monotonic() - start) * 1000,
+                conversation_id_delivered=delivered,
+            )
+            return result
+        finally:
+            lifecycle.settle_left_over_custom_events()
 
     setattr(wrapped, _WRAPPED_FLAG, True)
     tool_manager.call_tool = wrapped
@@ -207,7 +213,13 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 # --- tools/list seam ---------------------------------------------------------
 
 
-def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> None:
+def _inject_tool_schemas(
+    server: Any,
+    data: MCPAnalyticsData,
+    tools: list,
+    *,
+    advertise_conversation_id: bool = True,
+) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
     Runs on both the client-facing listing and the SDK's internal cache-
@@ -222,6 +234,7 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
             owns_context=_tool_owns_context(server, tool.name),
             context_required=True,
             is_sdk_virtual_tool=False,
+            advertise_conversation_id=advertise_conversation_id,
         )
 
 
@@ -290,10 +303,20 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             is_first_page=is_first_listing_page(getattr(req, "params", None)),
         )
 
-        _inject_tool_schemas(server, data, tools)
+        _inject_tool_schemas(
+            server,
+            data,
+            tools,
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
+        )
 
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="inputSchema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="inputSchema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

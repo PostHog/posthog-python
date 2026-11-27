@@ -41,6 +41,7 @@ from posthog.mcp._instrumentation import (
 )
 from posthog.mcp._internal import MCPAnalyticsData, set_server_tracking_data
 from posthog.mcp.logger import set_logger
+from posthog.mcp.session import ResolvedSession
 from posthog.mcp.types import FeedbackReport, MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import FakeClient, flush_background
 
@@ -1470,31 +1471,34 @@ async def test_event_options_reach_the_v1_payload(identified, expected):
 async def _record_every_event_type(data, session_id):
     """Drive every auto-capture call site that runs ``event_properties``."""
     now = datetime.now(timezone.utc)
+    session = ResolvedSession(session_id, "mcp")
     await record_initialize(
         data,
-        session_id=session_id,
+        session=session,
         params={"clientInfo": {"name": "c"}},
         result=None,
         extra=None,
         timestamp=now,
     )
     # The first-request stand-in for an initialize nothing observed.
-    await _maybe_emit_initialize(data, "ses_first", "generated", None, None, None)
+    await _maybe_emit_initialize(
+        data, ResolvedSession("ses_first", "generated"), None, None, None
+    )
     await record_tool_call(
-        data, session_id, name="broken", arguments={}, error=RuntimeError("boom")
+        data, session, name="broken", arguments={}, error=RuntimeError("boom")
     )
     await record_missing_capability(
-        data, session_id, tool_name="get_more_tools", context="csv", arguments={}
+        data, session, tool_name="get_more_tools", context="csv", arguments={}
     )
     await record_feedback(
         data,
-        session_id,
+        session,
         report=FeedbackReport(summary="good"),
         tool_name="send_feedback",
         arguments={},
     )
     await record_tools_list(
-        data, session_id, names=["a"], request={"method": "tools/list"}
+        data, session, names=["a"], request={"method": "tools/list"}
     )
     for event_type, method in (
         (MCPAnalyticsEventType.MCP_RESOURCES_LIST, "resources/list"),
@@ -1502,7 +1506,7 @@ async def _record_every_event_type(data, session_id):
     ):
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request={"method": method, "params": {"uri": "file:///a"}},
         )

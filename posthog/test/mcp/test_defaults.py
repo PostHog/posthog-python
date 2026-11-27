@@ -126,4 +126,5 @@ async def test_carried_session_is_preserved_until_agent_echoes(source, echoed):
     assert not call.minted_conversation_id
     assert call.conversation_id == (handle if echoed else None)
     assert call.virtual_result_texts("ok") == ["ok"]
-    assert await call.prepare_session(call.conversation_id) == expected
+    session = await call.prepare_session(call.conversation_id)
+    assert session.session_id == expected
