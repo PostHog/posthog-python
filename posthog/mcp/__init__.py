@@ -173,6 +173,9 @@ class McpAnalytics:
         data = get_server_tracking_data(self._key)
         if data is None:
             return
+        # Look up the unsettled call before reading its session: settlement only
+        # ever moves forward, so a call that settles in between is read as settled.
+        pending = unsettled_custom_events(data)
         session_id, session_source = current_session(data)
         event_input = {
             "session_id": session_id,
@@ -183,7 +186,6 @@ class McpAnalytics:
             "properties": properties,
             "event_options": event_options,
         }
-        pending = unsettled_custom_events(data)
         if pending is not None:
             settled = pending.defer(event_input)
             if settled is None:

@@ -451,3 +451,38 @@ async def test_a_flush_sends_a_cancelled_calls_custom_events_through_async_hooks
 
     await analytics[0].flush()
     assert len(events_named(client, "inside_tool")) == 1
+
+
+async def test_a_custom_event_captured_as_its_call_settles_gets_the_settled_session(
+    monkeypatch,
+):
+    """A tool's own thread can capture at the instant its call settles: the session
+    it picks and the settlement must not straddle it."""
+    import posthog.mcp as mcp_module
+    from posthog.mcp.session import (
+        PendingCustomEvents,
+        ResolvedSession,
+        bind_in_tool_session,
+        current_session,
+    )
+
+    client = FakeClient()
+    analytics = instrument(FastMCP("t"), client, anchored())
+    data = get_server_tracking_data(analytics._key)
+    primed = ResolvedSession("ses_primed", "generated")
+    settled = ResolvedSession("ses_settled", "conversation")
+    pending = PendingCustomEvents()
+
+    def read_then_settle(read_from):
+        session = current_session(read_from)
+        pending.settle(settled)
+        return session
+
+    monkeypatch.setattr(mcp_module, "current_session", read_then_settle)
+    with bind_in_tool_session(data, primed, pending):
+        await analytics.capture("inside_tool")
+    await analytics.flush()
+    await flush_background()
+
+    (custom,) = events_named(client, "inside_tool")
+    assert custom["properties"]["$session_id"] == settled.session_id
