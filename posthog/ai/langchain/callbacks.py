@@ -47,7 +47,7 @@ from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
     _resolve_ai_client,
-    _user_distinct_id,
+    _resolve_distinct_id,
     finalize_ai_content,
     _format_ai_error,
     get_model_params,
@@ -154,6 +154,9 @@ class CallbackHandler(BaseCallbackHandler):
         Args:
             client: PostHog client instance.
             distinct_id: Optional distinct ID of the user to associate the trace with.
+                When omitted or blank, falls back to the active PostHog context
+                distinct ID (set via ``identify_context``), or sends personless
+                events if neither is set.
             trace_id: Optional trace ID to use for the event.
             properties: Optional additional metadata to use for the trace.
             privacy_mode: Whether to redact the input and output of the trace.
@@ -617,13 +620,16 @@ class CallbackHandler(BaseCallbackHandler):
                     _tool_message_text(outputs),
                 )
 
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
         _capture_ai_event(
             self._ph_client,
             event_name,
-            distinct_id=_user_distinct_id(self._distinct_id) or run_id,
+            distinct_id=resolved_distinct_id
+            if resolved_distinct_id is not None
+            else run_id,
             properties=event_properties,
             groups=self._groups,
-            personless=_user_distinct_id(self._distinct_id) is None,
+            personless=resolved_distinct_id is None,
             options=self._options,
         )
 
@@ -640,12 +646,15 @@ class CallbackHandler(BaseCallbackHandler):
             return event_properties
 
         exception_options = dict(options)
-        if _user_distinct_id(self._distinct_id) is None:
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
+        if resolved_distinct_id is None:
             # Matches the AI event: without a user, person processing stays off.
             exception_options["process_person_profile"] = False
         exception_id = self._ph_client.capture_exception(
             exception,
-            distinct_id=self._distinct_id,
+            distinct_id=resolved_distinct_id
+            if resolved_distinct_id is not None
+            else self._distinct_id,
             groups=self._groups,
             properties=event_properties,
             options=exception_options or None,
@@ -797,13 +806,16 @@ class CallbackHandler(BaseCallbackHandler):
                 if stop_reason is not None:
                     event_properties["$ai_stop_reason"] = stop_reason
 
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
         _capture_ai_event(
             self._ph_client,
             "$ai_generation",
-            distinct_id=_user_distinct_id(self._distinct_id) or trace_id,
+            distinct_id=resolved_distinct_id
+            if resolved_distinct_id is not None
+            else trace_id,
             properties=event_properties,
             groups=self._groups,
-            personless=_user_distinct_id(self._distinct_id) is None,
+            personless=resolved_distinct_id is None,
             # The handler's options win over the run's, like its properties.
             options={**_ai_event_options(run.posthog_options), **self._options},
         )

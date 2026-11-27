@@ -534,6 +534,84 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert trace_props["$ai_span_name"] == "RunnableSequence"
 
 
+def test_context_distinct_id_is_used(mock_client):
+    from posthog import identify_context, new_context
+
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+
+    with new_context():
+        identify_context("context-user")
+        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
+
+    assert mock_client.capture_ai.call_count == 3
+    for call in mock_client.capture_ai.call_args_list:
+        assert call[1]["distinct_id"] == "context-user"
+        assert "options" not in call[1]
+
+    # An explicit handler distinct_id still wins over the context.
+    mock_client.capture_ai.reset_mock()
+    with new_context():
+        identify_context("context-user")
+        handler = CallbackHandler(mock_client, distinct_id="explicit")
+        chain.invoke({}, config={"callbacks": [handler]})
+    assert mock_client.capture_ai.call_count == 3
+    for call in mock_client.capture_ai.call_args_list:
+        assert call[1]["distinct_id"] == "explicit"
+        assert "options" not in call[1]
+
+
+def test_context_distinct_id_exception_autocapture(mock_client):
+    from langchain_core.runnables import RunnableLambda
+    from posthog import identify_context, new_context
+
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-ctx"
+
+    def failing_span(_):
+        raise ValueError("boom")
+
+    with new_context():
+        identify_context("context-user")
+        with pytest.raises(ValueError):
+            RunnableLambda(failing_span).invoke(
+                {}, config={"callbacks": [CallbackHandler(mock_client)]}
+            )
+
+    assert mock_client.capture_exception.call_count == 1
+    exc_kwargs = mock_client.capture_exception.call_args[1]
+    assert exc_kwargs["distinct_id"] == "context-user"
+    assert exc_kwargs["options"] is None
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["distinct_id"] == "context-user"
+    assert "options" not in mock_client.capture_ai.call_args[1]
+
+
+def test_zero_distinct_id_preserved_over_context(mock_client):
+    from langchain_core.runnables import RunnableLambda
+    from posthog import identify_context, new_context
+
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exc-id"
+
+    def fail(_):
+        raise ValueError("boom")
+
+    with new_context():
+        identify_context("context-user")
+        with pytest.raises(ValueError):
+            RunnableLambda(fail).invoke(
+                {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=0)]}
+            )
+
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args[1]["distinct_id"] == 0
+    assert "options" not in mock_client.capture_ai.call_args[1]
+    assert mock_client.capture_exception.call_count == 1
+    assert mock_client.capture_exception.call_args[1]["distinct_id"] == 0
+    assert mock_client.capture_exception.call_args[1]["options"] is None
+
+
 def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
