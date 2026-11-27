@@ -809,6 +809,28 @@ def test_a_number_operator_reads_numbers_like_the_flags_service(
     assert _match(operator, filter_value, property_value) == expected
 
 
+# Many digits and then a character that ends the number. A pattern whose digit
+# quantifiers overlap backtracks over this in quadratic time.
+LONG_DIGITS = "1" * 100_000 + "x"
+
+
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize(
+    "operator, filter_value, property_value, expected",
+    [
+        pytest.param("gt", 5, LONG_DIGITS, "invalid_property", id="gt-property"),
+        pytest.param("gt", LONG_DIGITS, 6, "invalid_property", id="gt-filter"),
+        pytest.param(
+            "is_date_after", "2025-06-15", LONG_DIGITS, "missing_context", id="date"
+        ),
+    ],
+)
+def test_a_long_string_that_is_not_a_number_is_read_in_linear_time(
+    operator, filter_value, property_value, expected
+):
+    assert _match(operator, filter_value, property_value) == expected
+
+
 @pytest.mark.parametrize(
     "operator, filter_value, property_value",
     [

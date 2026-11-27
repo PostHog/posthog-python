@@ -952,9 +952,10 @@ def _match_number(predicate: _Predicate, value: Any) -> bool:
 
 
 # The decimal numbers the reference reads from a string. Python's ``float`` also takes
-# surrounding whitespace and underscores.
+# surrounding whitespace and underscores. Fraction digits come only after the point:
+# two digit runs that could share digits would backtrack in quadratic time.
 _NUMBER_PATTERN = re.compile(
-    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
+    r"[+-]?(?:inf|infinity|nan|(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)",
     re.IGNORECASE,
 )
 
