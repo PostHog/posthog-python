@@ -1,6 +1,7 @@
 """Local evaluation of feature flags whose ``filters.version`` is 2.
 
-Nothing in the SDK calls this module yet, and no name in it is public.
+The client calls :func:`_evaluate_definition` for every loaded definition whose config
+version is not 1. No name in this module is public.
 
 A config version 2 flag holds an ordered list of rules. The first rule whose targeting
 matches decides the result, unless its rollout misses and the rule says to continue.
@@ -19,7 +20,9 @@ so a document is never partly evaluated. :func:`_evaluate` returns exactly one o
 - :class:`_EvaluationError`: a property value or a regular expression is invalid.
 
 None of them is a guess. A caller that cannot use the result must fall back to the
-flags service, not to ``False`` or to the flag default.
+flags service, not to ``False`` or to the flag default. :func:`_evaluate_definition`
+does that for the client: it turns a result into the record a ``/flags?v=4`` response
+gives, and anything else into the unresolved reason of the client's fallback.
 
 The ``exact`` and text operators and regular expressions use the helpers of the version
 1 evaluator, which already follow the flags service. Numbers, semantic versions and
@@ -35,6 +38,7 @@ pattern.
 
 from __future__ import annotations
 
+import copy
 import datetime
 import hashlib
 import math
@@ -45,6 +49,7 @@ from typing import (
     Any,
     Callable,
     ClassVar,
+    Dict,
     FrozenSet,
     List,
     Mapping,
@@ -58,6 +63,7 @@ from .feature_flags import (
     InconclusiveMatchError,
     _ascii_lower,
     _compile_regex,
+    _is_config_version_1,
     _match_exact_property,
     _match_regex,
     _match_text_property,
@@ -65,7 +71,13 @@ from .feature_flags import (
     _subtract_years,
     _value_to_string,
 )
-from .types import UnresolvedFlagReason
+from .types import (
+    FeatureFlag,
+    UnresolvedFlagReason,
+    _MalformedRecord,
+    _parse_record,
+    _read_int,
+)
 
 _CONFIG_VERSION = 2
 _ASSIGNMENT_ALGORITHM = "sha1_60_v1"
@@ -1454,3 +1466,142 @@ def _instant(wall_clock: datetime.datetime, nanoseconds: int, offset: int) -> _I
     days = wall_clock.toordinal() - _EPOCH_ORDINAL
     seconds = wall_clock.hour * 3600 + wall_clock.minute * 60 + wall_clock.second
     return (days * 86_400 + seconds - offset, nanoseconds)
+
+
+# --- Local evaluation in the client --------------------------------------------------
+#
+# The client evaluates a loaded definition here when its config version is not 1. The
+# definitions request does not select config version 2 flags yet, so none arrives from
+# the API; one can still come from a definition cache that a newer release shares.
+
+# The reason description of a locally evaluated record, as for a version 1 flag.
+_LOCAL_REASON_DESCRIPTION = "Evaluated locally"
+
+
+class _ParsedDefinition(NamedTuple):
+    """A loaded definition and its ``filters``, parsed once when definitions load."""
+
+    definition: Mapping[str, Any]
+    config: Union[_Config, _Unsupported]
+
+
+def _parse_definitions(flags: List[Any]) -> Dict[str, _ParsedDefinition]:
+    """Parse each config version 2 definition of a definitions list, by flag key."""
+    # A definition that is not a dict reads as version 1, so each one here is a dict.
+    return {
+        flag["key"]: _ParsedDefinition(flag, _parse_config(flag.get("filters")))
+        for flag in flags
+        if not _is_config_version_1(flag) and flag.get("key") is not None
+    }
+
+
+def _config_for(
+    definition: Mapping[str, Any], parsed: Mapping[Any, _ParsedDefinition]
+) -> Union[_Config, _Unsupported]:
+    """The parsed ``filters`` of a definition, read now if it was not parsed on load."""
+    entry = parsed.get(definition.get("key"))
+    if entry is not None and entry.definition is definition:
+        return entry.config
+    return _parse_config(definition.get("filters"))
+
+
+def _unresolved_reason(
+    definition: Mapping[str, Any], parsed: Mapping[Any, _ParsedDefinition]
+) -> Optional[UnresolvedFlagReason]:
+    """The reason the definition alone leaves the flag unresolved, known on load."""
+    if definition.get("active") and isinstance(
+        _config_for(definition, parsed), _Unsupported
+    ):
+        return UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+    return None
+
+
+def _evaluate_definition(
+    definition: Mapping[str, Any],
+    parsed: Mapping[Any, _ParsedDefinition],
+    *,
+    distinct_id: Any,
+    properties: Mapping[str, Any],
+    property_matching_version: int,
+) -> FeatureFlag:
+    """Evaluate a config version 2 definition for one person.
+
+    Returns the record a ``/flags?v=4`` response gives for the same result, so the
+    client reads it and sends its flag events as for a remote record. Raises
+    :class:`InconclusiveMatchError` with the unresolved reason when the evaluator
+    gives no value; the caller then falls back as for a version 1 flag.
+
+    The flags service evaluates these flags with the distinct ID only, so experience
+    continuity and device bucketing do not apply. The caller never knows that its
+    properties are complete, and dates without an offset are read in UTC, as version
+    1 local evaluation reads them.
+    """
+    outcome = _evaluate(
+        _config_for(definition, parsed),
+        _Context(
+            identifier=str(distinct_id),
+            properties=properties,
+            properties_complete=False,
+            explicit_exact_matching=property_matching_version == 2,
+            timezone=datetime.timezone.utc,
+        ),
+        active=bool(definition.get("active")),
+    )
+    if isinstance(outcome, _Evaluated):
+        record = _record(definition, outcome)
+        if not record._failed:
+            return record
+        outcome = _Unsupported("malformed", record._malformed_field or "record")
+    raise InconclusiveMatchError(_describe(outcome), reason=_reason_of(outcome))
+
+
+def _record(definition: Mapping[str, Any], outcome: _Evaluated) -> FeatureFlag:
+    key = definition["key"]
+    metadata: Dict[str, Any] = {
+        "config_version": _CONFIG_VERSION,
+        "description": None,
+        "payload": None,
+    }
+    for field in ("id", "version"):
+        try:
+            metadata[field] = _read_int(definition.get(field), field)
+        except _MalformedRecord:
+            pass  # Left out, so that a bad value does not fail the whole record.
+    if isinstance(definition.get("has_experiment"), bool):
+        metadata["has_experiment"] = definition["has_experiment"]
+    for field, value in (
+        ("rule_type", outcome.rule_type),
+        ("rule_id", outcome.rule_id),
+        ("variant_key", outcome.variant_key),
+    ):
+        if value is not None:
+            metadata[field] = value
+    response = {
+        "key": key,
+        # An object value is the configuration's own object.
+        "value": copy.deepcopy(outcome.value),
+        "reason": {
+            "code": outcome.reason,
+            "condition_index": outcome.rule_index,
+            "description": _LOCAL_REASON_DESCRIPTION,
+        },
+        "metadata": metadata,
+    }
+    return _parse_record(FeatureFlag, key, response)
+
+
+def _reason_of(
+    outcome: Union[_Inconclusive, _Unsupported, _EvaluationError],
+) -> UnresolvedFlagReason:
+    if isinstance(outcome, _Inconclusive):
+        return outcome.reason
+    if isinstance(outcome, _EvaluationError) and outcome.kind == "invalid_property":
+        # The person property is not in a form the rule can compare.
+        return UnresolvedFlagReason.MISSING_CONTEXT
+    return UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+
+
+def _describe(outcome: Union[_Inconclusive, _Unsupported, _EvaluationError]) -> str:
+    if isinstance(outcome, _Unsupported):
+        return f"The config version 2 document is {outcome.kind} at '{outcome.field}'"
+    return outcome.detail

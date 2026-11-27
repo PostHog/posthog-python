@@ -114,6 +114,7 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
+    _LocalDetailsFlagRecord,
     _LocalFlagRecord,
     _EvaluatedFlagRecord,
     _RemoteFlagRecord,
@@ -124,8 +125,15 @@ from posthog.feature_flags import (
     RequiresServerEvaluation,
     _get_definition_unresolved_reason,
     _group_key_to_string,
+    _is_config_version_1,
     match_feature_flag_properties,
     resolve_bucketing_value,
+)
+from ._feature_flags_v2 import (
+    _evaluate_definition,
+    _parse_definitions,
+    _ParsedDefinition,
+    _unresolved_reason as _v2_unresolved_reason,
 )
 from posthog.flag_definition_cache import (
     FlagDefinitionCacheData,
@@ -204,6 +212,32 @@ _atexit_deadline_lock = threading.Lock()
 class _LocalEvaluationSnapshot(FlagDefinitionCacheData):
     flags_by_key: Dict[str, Any]
     flag_definition_version: int
+    # The config version 2 definitions of ``flags``, parsed when they loaded.
+    parsed_v2_definitions: Dict[str, _ParsedDefinition]
+
+
+# The field of the external definition cache that holds the definitions whose config
+# version is not 1. ``flags`` keeps the version 1 definitions only, so a release that
+# reads only ``flags`` never evaluates a definition it cannot read.
+_V2_FLAGS_CACHE_FIELD = "flags_v2"
+
+
+def _split_by_config_version(flags: List[Any]) -> Tuple[List[Any], List[Any]]:
+    """The version 1 definitions and the others, each in their loaded order, as the
+    definition cache stores them."""
+    version_1: List[Any] = []
+    others: List[Any] = []
+    for flag in flags:
+        (version_1 if _is_config_version_1(flag) else others).append(flag)
+    return version_1, others
+
+
+def _with_cached_v2_flags(data: FlagDefinitionCacheData) -> FlagDefinitionCacheData:
+    """Cached definitions with the config version 2 definitions back in ``flags``."""
+    v2_flags = cast(Mapping[str, Any], data).get(_V2_FLAGS_CACHE_FIELD)
+    if not isinstance(v2_flags, list) or not v2_flags:
+        return data
+    return cast(FlagDefinitionCacheData, {**data, "flags": [*data["flags"], *v2_flags]})
 
 
 def _supports_lane_synchronization(queue) -> bool:
@@ -1473,6 +1507,7 @@ class Client(object):
             None  # private variable to store flags
         )
         self.feature_flags_by_key: Optional[dict[str, Any]] = None
+        self._parsed_v2_definitions: Dict[str, _ParsedDefinition] = {}
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
         self._property_matching_version = 1
@@ -2066,12 +2101,20 @@ class Client(object):
         """
         Set the local evaluation feature flags.
         """
-        self._feature_flags = flags or []
+        flags = flags or []
+        self._set_feature_flags(flags, _parse_definitions(flags))
+
+    def _set_feature_flags(
+        self, flags: List[Any], parsed_v2_definitions: Dict[str, _ParsedDefinition]
+    ) -> None:
+        """Install definitions with the config version 2 documents parsed from them."""
+        self._feature_flags = flags
         self.feature_flags_by_key = {
             flag["key"]: flag
             for flag in self._feature_flags
             if flag.get("key") is not None
         }
+        self._parsed_v2_definitions = parsed_v2_definitions
         assert self.feature_flags_by_key is not None, (
             "feature_flags_by_key should be initialized when feature_flags is set"
         )
@@ -4144,12 +4187,33 @@ class Client(object):
                     self._flag_definition_cache_provider_async_runner.close()
                     self._flag_definition_cache_provider_async_runner = None
 
+    def _flag_definitions_for_cache(self) -> FlagDefinitionCacheData:
+        """The loaded definitions as the external definition cache stores them."""
+        v1_flags, v2_flags = _split_by_config_version(self.feature_flags or [])
+        data: Dict[str, Any] = {
+            "flags": v1_flags,
+            "group_type_mapping": self.group_type_mapping or {},
+            "cohorts": self.cohorts or {},
+            "minimal_flag_called_events": self._minimal_flag_called_events,
+            "property_matching_version": self._property_matching_version,
+        }
+        if v2_flags:
+            # Left out without such flags, so the data stays as before for them.
+            data[_V2_FLAGS_CACHE_FIELD] = v2_flags
+        return cast(FlagDefinitionCacheData, data)
+
     @staticmethod
     def _hash_flag_definitions(data: FlagDefinitionCacheData) -> str:
         # Hash only evaluation inputs, not transport metadata such as the ETag.
+        flags = data["flags"]
+        if isinstance(flags, list):
+            # In the order the definition cache stores them, so a client that loads
+            # them from the cache gives the same hash.
+            v1_flags, v2_flags = _split_by_config_version(flags)
+            flags = [*v1_flags, *v2_flags]
         serialized = json.dumps(
             {
-                "flags": data["flags"],
+                "flags": flags,
                 "cohorts": data["cohorts"],
                 "group_type_mapping": data["group_type_mapping"],
                 "property_matching_version": data.get("property_matching_version", 1),
@@ -4165,12 +4229,19 @@ class Client(object):
         data: FlagDefinitionCacheData,
         *,
         _fingerprint: Optional[str] = None,
+        _parsed_v2_definitions: Optional[Dict[str, _ParsedDefinition]] = None,
     ) -> Optional[str]:
-        """Publish definitions and return the old cache identity for unlocked cleanup."""
+        """Publish definitions and return the old cache identity for unlocked cleanup.
+
+        The fingerprint and the parsed config version 2 documents are prepared before
+        taking the publication lock; a caller that already holds it passes both."""
         fingerprint = _fingerprint or self._hash_flag_definitions(data)
+        flags = data["flags"] or []
+        if _parsed_v2_definitions is None:
+            _parsed_v2_definitions = _parse_definitions(flags)
         with self._flag_definition_publication_lock:
             old_fingerprint = self._flag_definition_fingerprint
-            self.feature_flags = data["flags"]
+            self._set_feature_flags(flags, _parsed_v2_definitions)
             self.group_type_mapping = data["group_type_mapping"]
             self.cohorts = data["cohorts"]
             self._property_matching_version = data.get("property_matching_version", 1)
@@ -4237,12 +4308,17 @@ class Client(object):
                 if flag.get("evaluation_runtime") == "client":
                     continue
                 key = flag["key"]
-                reason = _get_definition_unresolved_reason(
-                    flag,
-                    snapshot["flags_by_key"],
-                    snapshot["cohorts"],
-                    snapshot["group_type_mapping"],
-                )
+                if not _is_config_version_1(flag):
+                    reason = _v2_unresolved_reason(
+                        flag, snapshot["parsed_v2_definitions"]
+                    )
+                else:
+                    reason = _get_definition_unresolved_reason(
+                        flag,
+                        snapshot["flags_by_key"],
+                        snapshot["cohorts"],
+                        snapshot["group_type_mapping"],
+                    )
             except Exception:
                 # Evaluation reports a definition this malformed when the flag is used.
                 continue
@@ -4300,6 +4376,7 @@ class Client(object):
                 "property_matching_version": self._property_matching_version,
                 "minimal_flag_called_events": self._minimal_flag_called_events,
                 "flag_definition_version": self.flag_definition_version,
+                "parsed_v2_definitions": self._parsed_v2_definitions,
             }
 
     def _load_feature_flags(self):
@@ -4326,7 +4403,9 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
-                    old_fingerprint = self._update_flag_state(cached_data)
+                    old_fingerprint = self._update_flag_state(
+                        _with_cached_v2_flags(cached_data)
+                    )
                     self._warn_unresolvable_flags()
                     if isinstance(self.flag_cache, RedisFlagCache):
                         self.flag_cache._invalidate_snapshot(old_fingerprint)
@@ -4373,12 +4452,13 @@ class Client(object):
                 etag=request_etag,
             )
 
-            # Canonical serialization can be expensive; do it before publication.
-            fingerprint = (
-                self._hash_flag_definitions(response.data)
-                if response.data is not None and not response.not_modified
-                else None
-            )
+            # Canonical serialization and parsing can be expensive; do them before
+            # publication.
+            fingerprint: Optional[str] = None
+            parsed_v2_definitions: Optional[Dict[str, _ParsedDefinition]] = None
+            if response.data is not None and not response.not_modified:
+                fingerprint = self._hash_flag_definitions(response.data)
+                parsed_v2_definitions = _parse_definitions(response.data["flags"] or [])
 
             with self._flag_definition_publication_lock:
                 if fetch_generation <= self._flag_definition_published_generation:
@@ -4414,17 +4494,13 @@ class Client(object):
                     return
 
                 old_fingerprint = self._update_flag_state(
-                    response.data, _fingerprint=fingerprint
+                    response.data,
+                    _fingerprint=fingerprint,
+                    _parsed_v2_definitions=parsed_v2_definitions,
                 )
 
                 if self._flag_definition_cache_provider:
-                    cache_data_to_store = {
-                        "flags": self.feature_flags or [],
-                        "group_type_mapping": self.group_type_mapping or {},
-                        "cohorts": self.cohorts or {},
-                        "minimal_flag_called_events": self._minimal_flag_called_events,
-                        "property_matching_version": self._property_matching_version,
-                    }
+                    cache_data_to_store = self._flag_definitions_for_cache()
 
                 # Publish the ETag only after its matching flag state is installed.
                 self._flags_etag = response.etag
@@ -4579,7 +4655,14 @@ class Client(object):
         warn_on_unknown_groups=True,
         device_id=None,
         _definition_snapshot: Optional[_LocalEvaluationSnapshot] = None,
-    ) -> FlagValue:
+    ) -> Union[FlagValue, FeatureFlag]:
+        """Evaluate a loaded definition by the evaluator of its config version.
+
+        Returns the value of a config version 1 flag, or the record of a config
+        version 2 flag, which is the record a ``/flags?v=4`` response gives. Raises
+        ``InconclusiveMatchError`` or ``RequiresServerEvaluation`` when local
+        evaluation cannot give the flag a value.
+        """
         snapshot = (
             _definition_snapshot
             if _definition_snapshot is not None
@@ -4590,6 +4673,15 @@ class Client(object):
         groups = groups or {}
         person_properties = person_properties or {}
         group_properties = group_properties or {}
+
+        if not _is_config_version_1(feature_flag):
+            return _evaluate_definition(
+                feature_flag,
+                snapshot["parsed_v2_definitions"],
+                distinct_id=distinct_id,
+                properties=person_properties,
+                property_matching_version=property_matching_version,
+            )
 
         # Create evaluation cache for flag dependencies
         evaluation_cache: dict[str, Optional[FlagValue]] = {}
@@ -4827,7 +4919,26 @@ class Client(object):
         local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
 
-        if flag_value is not None:
+        if isinstance(flag_value, FeatureFlag):
+            # A config version 2 flag: read its record as a remote one is read.
+            flag_details = flag_value
+            flag_result = FeatureFlagResult.from_flag_details(
+                flag_details, override_match_value
+            )
+            if self.flag_cache:
+                # Cache the evaluation, not a payload lookup override.
+                cached_details_result = FeatureFlagResult.from_flag_details(
+                    flag_details
+                )
+                if cached_details_result:
+                    self.flag_cache.set_cached_flag(
+                        distinct_id,
+                        key,
+                        cached_details_result,
+                        local_definition_version,
+                    )
+            value_from_details = override_match_value is None
+        elif flag_value is not None:
             lookup_match_value = (
                 override_match_value if override_match_value is not None else flag_value
             )
@@ -4953,8 +5064,9 @@ class Client(object):
             # Source the gate the same way as has_experiment above; see
             # _capture_feature_flag_called_if_needed for why.
             minimal_flag_called_events = self._minimal_flag_called_events
-            # Remotely-evaluated flags carry id and version in the response metadata;
-            # locally-evaluated flags read them from the definition that produced the value.
+            # Remotely-evaluated flags and the local record of a config version 2 flag
+            # carry id and version in the record metadata; locally-evaluated version 1
+            # flags read them from the definition that produced the value.
             local_flag_id: Optional[int] = None
             local_flag_version: Optional[int] = None
             if flag_was_locally_evaluated:
@@ -4963,8 +5075,9 @@ class Client(object):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
-                    local_flag_id = local_def.get("id")
-                    local_flag_version = local_def.get("version")
+                    if flag_details is None:
+                        local_flag_id = local_def.get("id")
+                        local_flag_version = local_def.get("version")
             elif isinstance(flag_details, FeatureFlag):
                 has_experiment = _metadata_has_experiment(flag_details.metadata)
                 minimal_flag_called_events = remote_minimal_flag_called_events
@@ -5007,8 +5120,8 @@ class Client(object):
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be locally evaluated.
         This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
-        When the flag was evaluated remotely and its config version 2 record is a complete experiment
-        split (an experiment rule with a rule ID and a variant key), it also captures the
+        When the flag's config version 2 record is a complete experiment split (an
+        experiment rule with a rule ID and a variant key), it also captures the
         `$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
         Examples:
@@ -5122,8 +5235,9 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
-        """Return the local value and its definitions for consistent payload lookup."""
+    ) -> tuple[Optional[Union[FlagValue, FeatureFlag]], _LocalEvaluationSnapshot]:
+        """Return the local value, or the record of a config version 2 flag, and the
+        definitions it came from, for consistent payload lookup."""
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -5357,8 +5471,9 @@ class Client(object):
 
         Shared by the single-flag evaluation path and the reads of a
         ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
-        identically. ``details`` is the parsed ``/flags`` record of the read, or
-        ``None`` for a locally evaluated flag. ``value_from_details`` includes a
+        identically. ``details`` is the record of the read: the parsed ``/flags``
+        record, the local record of a config version 2 flag, or ``None`` for a
+        locally evaluated version 1 flag. ``value_from_details`` includes a
         failed record supplying config-version and reason-code diagnostics despite
         having no value. Only a successful experiment split sends an exposure.
         """
@@ -5710,6 +5825,7 @@ class Client(object):
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
         unresolved: Dict[str, UnresolvedFlagReason] = {}
+        local_records: Dict[str, FeatureFlag] = {}
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
@@ -5723,6 +5839,7 @@ class Client(object):
                 flag_keys_to_evaluate=flag_keys,
                 device_id=device_id,
                 unresolved=unresolved,
+                records=local_records,
             )
         )
 
@@ -5740,6 +5857,10 @@ class Client(object):
             fallback_to_server = True
 
         for key, value in local_flags.items():
+            locally_evaluated_keys.add(key)
+            if key in local_records:
+                records[key] = _LocalDetailsFlagRecord(local_records[key])
+                continue
             flag_def = feature_flags_by_key.get(key) or {}
             records[key] = _LocalFlagRecord(
                 key=key,
@@ -5752,7 +5873,6 @@ class Client(object):
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
             )
-            locally_evaluated_keys.add(key)
 
         # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
         # Use the flags decision path directly so the resulting records carry id/version/reason
@@ -5836,7 +5956,11 @@ class Client(object):
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
         unresolved: Optional[Dict[str, UnresolvedFlagReason]] = None,
+        records: Optional[Dict[str, FeatureFlag]] = None,
     ) -> tuple[FlagsAndPayloads, bool, _LocalEvaluationSnapshot]:
+        """Evaluate the loaded flags. ``unresolved`` receives the reason of each flag
+        left without a value, and ``records`` the record of each config version 2 flag.
+        """
         person_properties = person_properties or {}
         group_properties = group_properties or {}
 
@@ -5859,7 +5983,7 @@ class Client(object):
 
             for flag in flags_to_process:
                 try:
-                    flags[flag["key"]] = self._compute_flag_locally(
+                    value = self._compute_flag_locally(
                         flag,
                         distinct_id,
                         groups=groups,
@@ -5869,11 +5993,24 @@ class Client(object):
                         device_id=device_id,
                         _definition_snapshot=snapshot,
                     )
-                    matched_payload = self._compute_payload_locally(
-                        flag["key"],
-                        flags[flag["key"]],
-                        _definition_snapshot=snapshot,
-                    )
+                    if isinstance(value, FeatureFlag):
+                        # A config version 2 record renders as a remote one does.
+                        if records is not None:
+                            records[flag["key"]] = value
+                        flags[flag["key"]] = value.get_value()
+                        matched_payload = (
+                            value.metadata.payload if value.enabled else None
+                        )
+                    else:
+                        if records is not None:
+                            # A later definition with the same key replaces the record.
+                            records.pop(flag["key"], None)
+                        flags[flag["key"]] = value
+                        matched_payload = self._compute_payload_locally(
+                            flag["key"],
+                            value,
+                            _definition_snapshot=snapshot,
+                        )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
                 except (InconclusiveMatchError, RequiresServerEvaluation) as e:
