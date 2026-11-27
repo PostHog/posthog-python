@@ -1,5 +1,11 @@
 # posthog
 
+## 8.4.0 — 2026-11-27
+
+### Minor changes
+
+- [32c0ab34](https://github.com/posthog/posthog-python/commit/32c0ab3494209a22b94503526bfaa58e622da90b) Support selecting a run-level scorer version when creating an offline evaluation experiment. Manage experiment formulas and their suite defaults through the sync and async scorer clients. — Thanks @Radu-Raicea!
+
 ## 8.3.0 — 2026-11-26
 
 ### Minor changes
