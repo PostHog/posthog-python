@@ -792,12 +792,16 @@ def _record_as_expectation(record: FeatureFlag) -> Dict[str, Any]:
         "value": record._value,
         "reason": record.reason.code,
     }
-    if metadata._rule_id is not None:
-        expectation["rule"] = {
-            "id": metadata._rule_id,
-            "rule_type": metadata._rule_type,
-            "index": record.reason.condition_index,
-        }
+    rule = {
+        "id": metadata._rule_id,
+        "rule_type": metadata._rule_type,
+        "index": record.reason.condition_index,
+    }
+    # The evaluator sets all three rule fields or none of them.
+    present = [field is not None for field in rule.values()]
+    assert all(present) or not any(present), f"{record.key} has a partial rule {rule}"
+    if all(present):
+        expectation["rule"] = rule
     if metadata._variant_key is not None:
         expectation["variant"] = metadata._variant_key
     return expectation
