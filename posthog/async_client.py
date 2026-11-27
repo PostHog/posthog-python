@@ -205,12 +205,12 @@ class AsyncClient:
 
         #### The differences from ``Client``
 
-        Constructor options match ``Client(...)``, except in four places:
+        Shared constructor options behave the same as on ``Client(...)``, with these differences:
 
-        - **Remote flags only.** ``secret_key`` authenticates ``get_remote_config_payload()`` and ``emails``. ``AsyncPosthog`` doesn't poll flag definitions locally.
+        - **Remote flags only.** ``secret_key`` authenticates ``get_remote_config_payload()`` and ``emails``. ``AsyncPosthog`` doesn't poll flag definitions locally, so ``enable_local_evaluation``, ``poll_interval``, ``flag_definition_cache_provider``, and ``flag_fallback_cache_url`` aren't accepted.
         - **Async callbacks.** ``before_send`` and ``on_error`` accept regular functions or ``async def`` coroutines.
         - **Shared contexts.** ``AsyncPosthog`` has no context methods. Open a context with ``posthog.new_context()``, ``posthog.scoped()``, or ``PosthogASGIMiddleware``, then call ``posthog.identify_context()`` and ``posthog.tag()`` inside it.
-        - **Sync-only features.** ``start_span()`` and ``sync_mode`` live on sync ``Posthog`` only.
+        - **Client-only options and methods.** ``sync_mode``, ``start_span()``, ``metrics``, ``traces``, ``enable_exception_autocapture``, ``enable_exception_autocapture_rate_limiting``, and the ``exception_autocapture_*`` rate-limit options live on sync ``Posthog`` only and raise ``TypeError`` if passed here.
         """
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -877,7 +877,8 @@ class AsyncClient:
 
         Don't ``await`` this method, which uses ``identify_context()`` when
         ``distinct_id`` is omitted and folds active tags into ``$set``. Without a
-        distinct ID or properties, it sends nothing and returns ``None``.
+        distinct ID (explicit or from ``identify_context()``), it sends nothing
+        and returns ``None``.
         """
         try:
             msg = self._build_person_properties_event("$set", "$set", kwargs)

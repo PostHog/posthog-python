@@ -190,7 +190,7 @@ Name | Description
 `secret_key` | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. For example, `posthog.Client(project_api_key, secret_key="phx_...")`. Default: `None`.
 `personal_api_key` | Deprecated alias for `secret_key`. Still honored for backwards compatibility; prefer `secret_key`, which also accepts a Project Secret API Key. Default: `None`.
 `disabled` | If True, disable captures and API requests. Useful in tests. Default: `False`.
-`disable_geoip` | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. Set `$ip` in event properties to geolocate from a client IP. Default: `True`.
+`disable_geoip` | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. Set `disable_geoip=False` (or `$geoip_disable: False` on the event) and pass `$ip` in event properties to geolocate from a client IP. Default: `True`.
 `is_server` | Whether events are emitted from a server-side runtime. Defaults to True; set to False when using the SDK as a client/CLI so the device OS is attributed to the person normally. Events get `$is_server` only when the event, context tags and `super_properties` leave it unset. Default: `True`.
 `historical_migration` | Mark events as historical migration imports. Pass past `timestamp` values on those `capture()` calls. Default: `False`.
 `feature_flags_request_timeout_seconds` | `float`. Timeout in seconds for feature flag and remote config requests. Default: `3`.
@@ -311,7 +311,7 @@ set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 
 Set properties on a person profile.
 
-Uses `identify_context()` when `distinct_id` is omitted, and folds active context tags into `$set`. Without a distinct ID or at least one property, the call sends nothing and returns `None`.
+Uses `identify_context()` when `distinct_id` is omitted, and folds active context tags into `$set`. Without a distinct ID (explicit or from `identify_context()`), the call sends nothing and returns `None`.
 
 **Parameters:**
 
@@ -1886,12 +1886,12 @@ Queue methods write to memory and return right away. Network reads and lifecycle
 
 #### The differences from `Client`
 
-Constructor options match `Client(...)`, except in four places:
+Shared constructor options behave the same as on `Client(...)`, with these differences:
 
-- **Remote flags only.** `secret_key` authenticates `get_remote_config_payload()` and `emails`. `AsyncPosthog` doesn't poll flag definitions locally.
+- **Remote flags only.** `secret_key` authenticates `get_remote_config_payload()` and `emails`. `AsyncPosthog` doesn't poll flag definitions locally, so `enable_local_evaluation`, `poll_interval`, `flag_definition_cache_provider`, and `flag_fallback_cache_url` aren't accepted.
 - **Async callbacks.** `before_send` and `on_error` accept regular functions or `async def` coroutines.
 - **Shared contexts.** `AsyncPosthog` has no context methods. Open a context with `posthog.new_context()`, `posthog.scoped()`, or `PosthogASGIMiddleware`, then call `posthog.identify_context()` and `posthog.tag()` inside it.
-- **Sync-only features.** `start_span()` and `sync_mode` live on sync `Posthog` only.
+- **Client-only options and methods.** `sync_mode`, `start_span()`, `metrics`, `traces`, `enable_exception_autocapture`, `enable_exception_autocapture_rate_limiting`, and the `exception_autocapture_*` rate-limit options live on sync `Posthog` only and raise `TypeError` if passed here.
 
 ### `AsyncClient.capture`
 
@@ -1919,7 +1919,7 @@ set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 
 Queue a `$set` event to overwrite person properties.
 
-Don't `await` this method, which uses `identify_context()` when `distinct_id` is omitted and folds active tags into `$set`. Without a distinct ID or properties, it sends nothing and returns `None`.
+Don't `await` this method, which uses `identify_context()` when `distinct_id` is omitted and folds active tags into `$set`. Without a distinct ID (explicit or from `identify_context()`), it sends nothing and returns `None`.
 
 ### `AsyncClient.set_once`
 

@@ -1271,7 +1271,9 @@ class Client(object):
             disable_geoip: Whether to disable server-side GeoIP enrichment.
                 Defaults to True. Events get ``$geoip_disable`` only when the
                 event, context tags and ``super_properties`` leave it unset.
-                Set ``$ip`` in event properties to geolocate from a client IP.
+                Set ``disable_geoip=False`` (or ``$geoip_disable: False`` on the
+                event) and pass ``$ip`` in event properties to geolocate from a
+                client IP.
             is_server: Whether events are emitted from a server-side runtime.
                 Defaults to True; set to False when using the SDK as a client/CLI
                 so the device OS is attributed to the person normally. Events
@@ -2649,8 +2651,8 @@ class Client(object):
         Set properties on a person profile.
 
         Uses ``identify_context()`` when ``distinct_id`` is omitted, and folds
-        active context tags into ``$set``. Without a distinct ID or at least one
-        property, the call sends nothing and returns ``None``.
+        active context tags into ``$set``. Without a distinct ID (explicit or
+        from ``identify_context()``), the call sends nothing and returns ``None``.
 
         Args:
             distinct_id: The distinct ID of the user.
