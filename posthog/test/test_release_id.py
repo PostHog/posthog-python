@@ -132,8 +132,25 @@ class TestClientReleaseId(unittest.TestCase):
             client.capture("python test event", distinct_id="user-1")
         self.assertEqual(events[0]["properties"]["$release_id"], "at-init")
 
-    def test_minimal_flag_called_events_keep_their_strict_allowlist(self) -> None:
+    def test_minimal_flag_called_events_keep_the_release_id(self) -> None:
         client, events = self._client("0198c1a2-release")
+        client._enqueue(
+            {
+                "event": "$feature_flag_called",
+                "distinct_id": "user-1",
+                "timestamp": None,
+                "properties": {"$feature_flag": "my-flag", "dropped": "value"},
+            },
+            None,
+            property_allowlist=_MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
+        )
+        properties = events[0]["properties"]
+        self.assertEqual(properties["$feature_flag"], "my-flag")
+        self.assertEqual(properties["$release_id"], "0198c1a2-release")
+        self.assertNotIn("dropped", properties)
+
+    def test_minimal_flag_called_events_omit_an_unset_release_id(self) -> None:
+        client, events = self._client(None)
         client._enqueue(
             {
                 "event": "$feature_flag_called",
@@ -144,7 +161,6 @@ class TestClientReleaseId(unittest.TestCase):
             None,
             property_allowlist=_MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
         )
-        self.assertEqual(events[0]["properties"]["$feature_flag"], "my-flag")
         self.assertNotIn("$release_id", events[0]["properties"])
 
 
