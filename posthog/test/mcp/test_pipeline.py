@@ -1059,6 +1059,12 @@ def _jwt_padded_to(length: int) -> str:
             "Open ",
             id="partly encoded nested scheme",
         ),
+        pytest.param(
+            "Open https://h/?next=password=hunter2" + "p" * 4000 + ";x=1",
+            "hunter2",
+            "Open ",
+            id="credential field in a value whose semicolon is past both cuts",
+        ),
     ],
 )
 def test_intent_scan_fails_closed_on_a_credential_unfinished_at_both_cuts(

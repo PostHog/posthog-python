@@ -340,7 +340,10 @@ def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
     # to others, and the value alone cannot say which. Splitting on it would cut
     # `password=pre;fix` in two and publish the second half, so instead the whole
     # value goes whenever any `;`-separated piece of it names a credential.
-    if ";" in value and _names_a_credential(value):
+    # A `=` makes the value read as a field just as a `;` does (`next=password=x`),
+    # and it sits beside the name it binds, so a scan cut before a far-off `;` still
+    # redacts.
+    if ("=" in value or ";" in value) and _names_a_credential(value):
         return _REDACTED_VALUE
     # A retained value can carry a URL of its own (a gateway's `?url=`). The budget
     # for that is one level: sanitize the first, and drop any value still carrying
