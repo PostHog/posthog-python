@@ -806,7 +806,7 @@ async def test_no_warning_when_session_is_anchored_by_conversation_id():
 async def test_no_warning_for_sse_transport():
     """The deprecated SSE transport carries its session as a query param."""
     ctx = _http_ctx()
-    ctx.request.query_params = {"session_id": "sse-session-1"}
+    ctx.request.query_params = {"session_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}
     ctx.session = SimpleNamespace(
         client_params=SimpleNamespace(protocolVersion="2025-06-18")
     )

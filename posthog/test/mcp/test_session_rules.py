@@ -217,6 +217,12 @@ def _request_context(query=None, headers=None, client_params=None):
 
 HANDSHAKE = SimpleNamespace(protocolVersion="2025-06-18")
 SSE_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+SSE_SPELLINGS = [
+    "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+    "0F1E2D3C4B5A69788796A5B4C3D2E1F0",
+    "{0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0}",
+    "urn:uuid:0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+]
 
 
 @pytest.mark.parametrize(
@@ -231,6 +237,13 @@ SSE_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
             ),
             SSE_ID,
         ),
+        (
+            _request_context(
+                {"session_id": SSE_ID},
+                client_params=SimpleNamespace(protocolVersion="2026-07-28"),
+            ),
+            SSE_ID,
+        ),
         (_request_context({"session_id": SSE_ID}), None),
         (
             _request_context(
@@ -239,6 +252,11 @@ SSE_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
             ),
             None,
         ),
+        *[
+            (_request_context({"session_id": spelling}, client_params=HANDSHAKE), SSE_ID)
+            for spelling in SSE_SPELLINGS
+        ],
+        (_request_context({"session_id": "not-a-uuid"}, client_params=HANDSHAKE), None),
         (SimpleNamespace(request=None, session=None), None),
         (None, None),
     ],
@@ -246,8 +264,11 @@ SSE_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
         "the Mcp-Session-Id header",
         "an SSE connection's query parameter",
         "an SSE connection's query parameter on mcp 2.x",
+        "a 2026-07-28 request that mcp 1.x negotiated down",
         "a query parameter on a stateless request",
         "a query parameter on a 2026-07-28 request",
+        *[f"the SSE spelling {spelling!r}" for spelling in SSE_SPELLINGS],
+        "an SSE query parameter that is not a UUID",
         "stdio",
         "no context",
     ],

@@ -32,6 +32,7 @@ in-memory transports carry no headers at all.
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from uuid import UUID
 
 from .constants import SESSIONLESS_PROTOCOL_VERSION
 from .session_token import read_mcp_session_header
@@ -79,7 +80,9 @@ def read_transport_session_id(extra: Any, *, handshake: bool = False) -> Optiona
 
     The SSE transport checks the ``session_id`` query parameter against its open
     streams, while a stateless request never completes a handshake, so adding the
-    parameter to a request picks no session."""
+    parameter to a request picks no session. The SDK looks the parameter up as
+    ``UUID(hex=...)``, which accepts hyphenated, braced and upper-case spellings
+    of one connection, so it is returned as the canonical hex."""
     header = read_mcp_session_header(get_request_headers(extra))
     if header is not None:
         return header
@@ -89,20 +92,19 @@ def read_transport_session_id(extra: Any, *, handshake: bool = False) -> Optiona
             return None
         params = getattr(get_request(ctx), "query_params", None)
         value = params.get("session_id") if params is not None else None
+        return UUID(hex=value).hex if isinstance(value, str) else None
     except Exception:  # noqa: BLE001 - a transport probe must never break a tool call
         return None
-    return value if isinstance(value, str) and value else None
 
 
 def _completed_a_handshake(ctx: Any) -> bool:
     params = getattr(getattr(ctx, "session", None), "client_params", None)
     if params is None:
         return False
-    # mcp 2.x builds client params from a 2026-07-28 request's own envelope.
-    version = getattr(params, "protocol_version", None) or getattr(
-        params, "protocolVersion", None
-    )
-    return version != SESSIONLESS_PROTOCOL_VERSION
+    # Only mcp 2.x builds client params (snake_case) from a 2026-07-28 request's
+    # own envelope. mcp 1.x sets them solely from a real initialize, and keeps
+    # the version the client asked for even when it negotiated another.
+    return getattr(params, "protocol_version", None) != SESSIONLESS_PROTOCOL_VERSION
 
 
 def _request_context(extra: Any) -> Any:
