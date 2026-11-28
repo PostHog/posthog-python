@@ -65,6 +65,7 @@ from ._model_parameters import (
     resolve_model,
 )
 from ._output_instructions import add_instructions_to_output_schema
+from .constants import SESSIONLESS_PROTOCOL_VERSION
 from .logger import log, warn
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
@@ -82,7 +83,6 @@ from .session import (
     PendingCustomEvents,
     bind_in_tool_session,
     resolve_anchored_session,
-    new_session_id,
     resolve_session_id_with_source,
     touch_connection_session,
 )
@@ -429,46 +429,6 @@ def resolve_session_and_client(
     return token, client_name, client_version, protocol_version
 
 
-async def prime_session(
-    data: MCPAnalyticsData,
-    *,
-    mcp_session_id: Optional[str],
-    token: Optional[SessionTokenPayload] = None,
-    request_session_id: Optional[str] = None,
-) -> ResolvedSession:
-    """Point the shared per-server session at *this* request before the tool body runs.
-
-    ``McpAnalytics.capture()`` reads ``data.session_id`` for custom in-tool
-    events. The conversation anchor can only be resolved after the call (we
-    don't know until then whether the agent received the handle), so without
-    this the tool body would read whatever the *previous* request left behind
-    and attribute a custom event to the wrong caller. Emits nothing — it only
-    settles the transport/memory session an in-tool event should belong to.
-
-    A client conversation id never reaches this shared state: it names one chat,
-    and a concurrent request would read it. A call that carries one is primed
-    like any other, which also counts its arrival on a one-client connection.
-    """
-    return await resolve_session_id_with_source(
-        data, mcp_session_id, token=token, request_session_id=request_session_id
-    )
-
-
-def _is_sse_request(extra: Optional[Dict[str, Any]]) -> bool:
-    """True for the deprecated SSE transport, which carries its session as a
-    ``session_id`` query parameter rather than a header.
-
-    Such a request resolves to a ``generated`` session for a reason the stateless
-    mint cannot fix -- the mint sets a response header an SSE client never replays --
-    so :func:`_warn_stateless_session_not_wired` would be recommending a remedy that
-    does not apply."""
-    try:
-        params = getattr(get_request(extra), "query_params", None)
-        return bool(params is not None and params.get("session_id"))
-    except Exception:  # noqa: BLE001 - a transport probe must never break a tool call
-        return False
-
-
 def _warn_stateless_session_not_wired(data: MCPAnalyticsData) -> None:
     """Warn once per server when a tool call/listing arrives over HTTP but the
     session still had to come from this process's memory.
@@ -483,8 +443,9 @@ def _warn_stateless_session_not_wired(data: MCPAnalyticsData) -> None:
     data.warned_no_stateless_session = True
     warn(
         "Warning: an MCP tool request arrived over streamable HTTP with no session id, so "
-        "PostHog generated a per-process $session_id that will fragment across requests "
-        "and pods. This usually means PostHogMcpStatelessSessionMiddleware never attached "
+        "PostHog generated a $session_id for that request alone, so the client's "
+        "requests fragment into one session each. This usually means "
+        "PostHogMcpStatelessSessionMiddleware never attached "
         "— e.g. the ASGI app was built or mounted before instrument() ran. If you build "
         "the app yourself, add the middleware explicitly: "
         "app.add_middleware(PostHogMcpStatelessSessionMiddleware). "
@@ -506,7 +467,6 @@ async def prepare_request(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    request_session_id: Optional[str] = None,
 ) -> ResolvedSession:
     """Resolve the session, run identify, then emit initialize if this request
     has to stand in for an unobserved handshake. Returns the session to stamp on
@@ -536,31 +496,41 @@ async def prepare_request(
     Where a seam observes the real handshake (:func:`record_initialize`), nothing
     is synthesized here.
 
-    A request that reached us over HTTP yet still resolved to this process's memory
-    has nothing correlating it across pods, which on a stateless server means the
-    mint middleware never attached — warn once rather than fragment silently."""
+    A request that reached us over HTTP with no session has nothing correlating it
+    with the client's other requests, which on a stateless server means the mint
+    middleware never attached — warn once rather than fragment silently."""
     session = await resolve_session_id_with_source(
         data,
         mcp_session_id,
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
-        request_session_id=request_session_id,
+        over_http=get_request(extra) is not None,
     )
-    if (
-        session.source in ("generated", "request")
-        and get_request(extra) is not None
-        and not _is_sse_request(extra)
-    ):
+    await _open_request(
+        data, session, client_name, client_version, request, extra, protocol_version
+    )
+    return session
+
+
+async def _open_request(
+    data: MCPAnalyticsData,
+    session: ResolvedSession,
+    client_name: Optional[str],
+    client_version: Optional[str],
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]],
+    protocol_version: Optional[str],
+) -> None:
+    if session.source == "request" and protocol_version != SESSIONLESS_PROTOCOL_VERSION:
         _warn_stateless_session_not_wired(data)
     await handle_identify(data, session.session_id, request, extra)
     await _maybe_emit_initialize(
         data, session, client_name, client_version, extra, protocol_version
     )
-    return session
 
 
-@dataclass(frozen=True)
+@dataclass
 class ToolCallLifecycle:
     """Common analytics policy for one tool call.
 
@@ -575,7 +545,6 @@ class ToolCallLifecycle:
     request_meta: Optional[Dict[str, Any]]
     client: Optional[ClientConversationRow]
     client_conversation: Optional[ClientConversation]
-    request_session_id: Optional[str]
     allow_self_reported_model: bool
     analytics_owned_parameters: Optional[FrozenSet[str]]
     request: Dict[str, Any]
@@ -599,6 +568,7 @@ class ToolCallLifecycle:
     pending_custom_events: PendingCustomEvents = field(
         default_factory=PendingCustomEvents
     )
+    arrival: Optional[ResolvedSession] = None
 
     @property
     def is_missing_capability(self) -> bool:
@@ -609,34 +579,47 @@ class ToolCallLifecycle:
         return self.feedback_name is not None and self.name == self.feedback_name
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
-        on_one_client_connection = (
-            get_request(self.extra) is None
-            and self.token is None
-            and not self.mcp_session_id
-        )
-        if self.client_conversation is not None and on_one_client_connection:
+        arrival = await self.prime_session()
+        if arrival.source == "generated":
             await touch_connection_session(self.data)
-        return await prepare_request(
-            self.data,
-            mcp_session_id=self.mcp_session_id,
-            client_name=self.client_name,
-            client_version=self.client_version,
-            protocol_version=self.protocol_version,
-            request=self.request,
-            extra=self.extra,
-            token=self.token,
-            conversation_id=conversation_id,
-            client_conversation=self.client_conversation,
-            request_session_id=self.request_session_id,
+        session = (
+            resolve_anchored_session(conversation_id, self.client_conversation)
+            or arrival
         )
+        await _open_request(
+            self.data,
+            session,
+            self.client_name,
+            self.client_version,
+            self.request,
+            self.extra,
+            self.protocol_version,
+        )
+        return session
 
     async def prime_session(self) -> ResolvedSession:
-        return await prime_session(
-            self.data,
-            mcp_session_id=self.mcp_session_id,
-            token=self.token,
-            request_session_id=self.request_session_id,
-        )
+        """Point the shared per-server session at *this* request before the tool body runs.
+
+        ``McpAnalytics.capture()`` reads ``data.session_id`` for custom in-tool
+        events. The conversation anchor can only be resolved after the call (we
+        don't know until then whether the agent received the handle), so without
+        this the tool body would read whatever the *previous* request left behind
+        and attribute a custom event to the wrong caller. Emits nothing — it only
+        settles the transport/memory session an in-tool event should belong to.
+
+        A client conversation id never reaches this shared state: it names one chat,
+        and a concurrent request would read it. A call that carries one is primed
+        like any other, which also counts its arrival on a one-client connection.
+        """
+        if self.arrival is None:
+            self.arrival = await resolve_session_id_with_source(
+                self.data,
+                self.mcp_session_id,
+                token=self.token,
+                over_http=get_request(self.extra) is not None,
+                tool_call=True,
+            )
+        return self.arrival
 
     @contextmanager
     def in_tool(self, primed: ResolvedSession) -> Iterator[None]:
@@ -858,18 +841,6 @@ def start_tool_call_lifecycle(
     client_conversation = read_client_conversation(client, request_meta)
     carries_session = token is not None or bool(mcp_session_id)
     handle_free = client is not None and client.handle_free
-    # Over HTTP the process session would mix this call with other clients': one
-    # its client id groups (an in-tool event reads it before the call), or one a
-    # handle-free client sends without its id and so with no handle either. Only
-    # stdio, which has no request, keeps the process session; an SSE-style
-    # `session_id` query parameter is the caller's to set, so it earns no exemption.
-    request_session_id = (
-        new_session_id()
-        if (client_conversation is not None or handle_free)
-        and not carries_session
-        and get_request(extra) is not None
-        else None
-    )
     # The client's own id wins, so a handle the agent echoes alongside it is
     # ignored. A carried session stays stable until the agent supplies its own
     # handle, and a handle-free client names its conversation itself, so neither
@@ -885,7 +856,6 @@ def start_tool_call_lifecycle(
         request_meta=request_meta,
         client=client,
         client_conversation=client_conversation,
-        request_session_id=request_session_id,
         allow_self_reported_model=allow_self_reported_model,
         analytics_owned_parameters=analytics_owned_parameters,
         request=build_tool_call_request(name, arguments),

@@ -6,7 +6,7 @@ posthog-js reproduces too. Runs under both MCP majors."""
 
 import asyncio
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import jsonschema
@@ -338,7 +338,7 @@ async def test_chatgpt_calls_on_a_shared_http_pod_keep_no_session_alive():
 
     await call(user_agent=OTHER)
     for _ in range(3):
-        data.last_activity -= timedelta(minutes=20)
+        data.last_activity = datetime.now(timezone.utc) - timedelta(minutes=20)
         await call(user_agent=CHATGPT, meta=CHATGPT_META)
     await call(user_agent="another-client/2.0")
     await _flush()
@@ -686,7 +686,7 @@ async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions
     assert bob["properties"]["$set"] == {"bob_only": "present"}
     assert bob["properties"]["$mcp_session_source"] == "generated"
     assert _events(client, "$mcp_initialize") == []
-    assert data.warned_no_stateless_session is (query is None)
+    assert data.warned_no_stateless_session is True
 
 
 async def test_a_one_client_connection_keeps_its_session_without_a_client_id():
@@ -1057,12 +1057,11 @@ async def test_a_request_session_leaves_a_transport_session_in_place():
     data = MCPAnalyticsData(options=MCPAnalyticsOptions(), session_id="ses_init")
     transport = await resolve_session_id_with_source(data, "mcp-1")
 
-    one_request = await resolve_session_id_with_source(
-        data, None, request_session_id="ses_one_request"
-    )
+    one_request = await resolve_session_id_with_source(data, None, over_http=True)
 
-    assert one_request == ("ses_one_request", "request")
-    assert await resolve_session_id_with_source(data, None) == transport
+    assert one_request.source == "request"
+    assert one_request.session_id != transport.session_id
+    assert (data.session_id, data.session_source) == transport
 
 
 @pytest.mark.parametrize(

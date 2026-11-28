@@ -95,8 +95,8 @@ The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
 - **MCP SDK 1.x.x over HTTP**: through `PostHogMcpStatelessSessionMiddleware`, which
   `instrument()` adds to the apps it autowires. If you mount the middleware
   yourself, pass the server: `app.add_middleware(PostHogMcpStatelessSessionMiddleware, server=mcp)`.
-  Without it, each pod reports the session's first request as its initialize.
-  The deprecated SSE transport also uses the session's first request.
+  Without it, each request is a session of its own and reports no initialize.
+  The deprecated SSE transport uses the session's first request.
   The middleware reads only requests that carry no `Mcp-Session-Id`, so an
   `initialize` that reuses an existing session id reports none.
 - **MCP SDK 1.x.x over stdio**: from the session's first request. A stdio server
@@ -497,8 +497,8 @@ server.run(transport="streamable-http")   # already wired
 
 Autowiring only affects an app built **after** `instrument()` runs. If you build or
 mount the ASGI app before `instrument()`, or in a different module (the common
-FastAPI case), the running app gets **no** middleware and every session falls back to
-a fragmented per-process id. Add the middleware to your app explicitly:
+FastAPI case), the running app gets **no** middleware and every request gets a
+`$session_id` of its own. Add the middleware to your app explicitly:
 
 ```python
 from posthog.mcp import PostHogMcpStatelessSessionMiddleware, get_mcp_session
@@ -537,8 +537,8 @@ The failure used to be silent. It now surfaces two ways:
 
 - **At `instrument()`**: if `streamable_http_app()` was already called before
   `instrument()` ran, so the live app has no middleware.
-- **At runtime, once**: the first time a tool call arrives over streamable HTTP and the
-  session still has to come from this process's memory.
+- **At runtime, once**: the first time a request arrives over streamable HTTP with no
+  session, so it gets a session of its own.
 
 Both go to the logger you pass via `MCPAnalyticsOptions(logger=...)` **and** to the
 `posthog.mcp` standard-library logger, so you see them without opting in. Silence them
@@ -564,6 +564,5 @@ The same installation code continues to support standalone FastMCP 2.x.x and 3.x
 
 Two gaps worth knowing: jlowin's `fastmcp` 2.x.x and 3.x.x don't expose the attribute the
 instrument-time check reads, so those servers get the runtime warning only. And the
-deprecated SSE transport is excluded. It keys sessions off a query parameter, and the
-mint sets a response header an SSE client never replays, so the middleware wouldn't
-help it.
+deprecated SSE transport needs no middleware: its connection's `session_id` query
+parameter groups its requests.

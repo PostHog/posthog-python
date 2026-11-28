@@ -349,7 +349,9 @@ async def _record_initialize(
         params = _initialize_params(message)[0]
         await record_initialize(
             data,
-            session=await _handshake_session(data, header, decode_session_id(header)),
+            session=await _handshake_session(
+                data, header, decode_session_id(header), over_http=True
+            ),
             params=params,
             result=None,
             extra={"session_id": header, "ctx": _InitializeContext(Request(scope))},

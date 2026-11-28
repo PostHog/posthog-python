@@ -15,7 +15,7 @@ import asyncio
 import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Set, Tuple
 
 from .logger import log
@@ -60,7 +60,6 @@ class MCPAnalyticsData:
     sink: Optional[McpEventSink] = None
     session_id: str = ""
     session_source: str = "generated"  # "generated" | "mcp" | "token"
-    last_mcp_session_id: Optional[str] = None
     # Set once we've warned that an HTTP request resolved with no session id — the
     # signature of a stateless server whose mint middleware never attached. Warned
     # a single time per server so the log isn't flooded on every request.
@@ -83,7 +82,7 @@ class MCPAnalyticsData:
     raw_tool_names_probe: Optional[Callable[[Any], Awaitable[Optional[Set[str]]]]] = (
         None
     )
-    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: Optional[datetime] = None
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)

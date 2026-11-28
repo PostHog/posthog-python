@@ -199,7 +199,6 @@ async def resolve_session_id(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    request_session_id: Optional[str] = None,
 ) -> str:
     """The session id for this request. See :func:`resolve_session_id_with_source`,
     which this wraps -- callers that need to know *where* the session came from
@@ -210,7 +209,6 @@ async def resolve_session_id(
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
-        request_session_id=request_session_id,
     )
     return session_id
 
@@ -219,6 +217,7 @@ async def handshake_session(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
+    over_http: bool = False,
 ) -> ResolvedSession:
     """The session an ``initialize`` belongs to: the one the client's later requests
     resolve to through :func:`resolve_session_id_with_source`.
@@ -226,14 +225,14 @@ async def handshake_session(
     A token or a transport session id gives it directly, so this leaves the server's
     shared session alone. One server serves many clients, and a handshake must not
     move the session that ``McpAnalytics.capture()`` reads. Without either, the
-    session is this process's own, which only the resolver can hand out."""
+    session is the connection's own, which only the resolver can hand out."""
     if token is not None:
         return ResolvedSession(token.session_id, "token")
     if mcp_session_id:
         return ResolvedSession(
             derive_session_id_from_mcp_session(mcp_session_id), "mcp"
         )
-    return await resolve_session_id_with_source(data, None)
+    return await resolve_session_id_with_source(data, None, over_http=over_http)
 
 
 async def handshake_session_id(
@@ -241,7 +240,10 @@ async def handshake_session_id(
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
 ) -> str:
-    """The id of :func:`handshake_session`, kept for callers of the earlier API."""
+    """The id of :func:`handshake_session`, kept for callers of the earlier API.
+
+    Stdio-only without a session id: it resolves to the process's own session. A
+    caller serving HTTP uses :func:`handshake_session` with ``over_http=True``."""
     return (await handshake_session(data, mcp_session_id, token)).session_id
 
 
@@ -270,7 +272,8 @@ async def resolve_session_id_with_source(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    request_session_id: Optional[str] = None,
+    over_http: bool = False,
+    tool_call: bool = False,
 ) -> ResolvedSession:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
@@ -303,10 +306,6 @@ async def resolve_session_id_with_source(
     for a request that didn't replay the token would merge unrelated clients under
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
-
-    ``request_session_id`` is a session the caller reserved for one HTTP request
-    in place of process memory, which belongs to a one-client connection and on a
-    shared HTTP server would group unrelated clients.
     """
     anchored = resolve_anchored_session(conversation_id, client_conversation)
     if anchored is not None:
@@ -326,42 +325,41 @@ async def resolve_session_id_with_source(
 
         if mcp_session_id:
             data.session_id = derive_session_id_from_mcp_session(mcp_session_id)
-            data.last_mcp_session_id = mcp_session_id
             data.session_source = "mcp"
             data.last_activity = now
             return ResolvedSession(data.session_id, "mcp")
 
-        if request_session_id:
+        if over_http:
             # One request's own: leaving it out of shared state keeps it from the
             # next request and from custom events captured outside any call.
-            return ResolvedSession(request_session_id, "request")
-
-        # Once a session is MCP-derived, keep it even if a later request arrives
-        # without the MCP session id, so the session doesn't fragment.
-        if data.session_source == "mcp" and data.last_mcp_session_id:
-            data.last_activity = now
-            return ResolvedSession(data.session_id, "mcp")
+            return ResolvedSession(new_session_id(), "request")
 
         # Memory fallback (single-owner transports like stdio). A leftover token
         # session must NOT leak to a credential-less request, so anything that
         # isn't already a generated session starts fresh; generated sessions
-        # persist and roll over on inactivity.
-        if data.session_source != "generated" or _is_stale(data, now):
+        # persist and roll over on inactivity between tool calls.
+        rotate = data.session_source != "generated" or (
+            tool_call and _is_stale(data, now)
+        )
+        if rotate:
             data.session_id = new_session_id()
             data.session_source = "generated"
-        data.last_activity = now
+        if rotate or tool_call:
+            data.last_activity = now
         return ResolvedSession(data.session_id, "generated")
 
 
 def _is_stale(data: MCPAnalyticsData, now: datetime) -> bool:
+    if data.last_activity is None:
+        return False
     timeout_seconds = INACTIVITY_TIMEOUT_IN_MINUTES * 60
-    return (now - data.last_activity).total_seconds() > timeout_seconds
+    return (now - data.last_activity).total_seconds() >= timeout_seconds
 
 
 async def touch_connection_session(data: MCPAnalyticsData) -> None:
-    """Count a finished call grouped by the client as connection activity, so a
-    later call without an id does not rotate a live one-client connection's id.
-    Rotation itself happens when a call arrives (see ``prime_session``).
+    """Count a finished call as connection activity: idle time runs from the end
+    of the previous call. Rotation itself happens when a call arrives (see
+    ``prime_session``).
 
     Only for a one-client connection (stdio): on a shared HTTP instance, keeping
     the instance's own session alive would group unrelated clients' requests."""

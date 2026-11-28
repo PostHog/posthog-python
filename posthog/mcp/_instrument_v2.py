@@ -49,7 +49,6 @@ from ._instrumentation import (
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
-    _is_sse_request,
     _to_jsonable,
     copy_tools_list_result,
     is_first_listing_page,
@@ -80,9 +79,9 @@ from ._raised_tool_error import raised_tool_error
 from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
-from .request_headers import get_request_headers
+from .request_headers import get_request, read_transport_session_id
 from .session import handshake_session
-from .session_token import SessionTokenPayload, read_mcp_session_header
+from .session_token import SessionTokenPayload, decode_session_id
 from .tools import (
     get_more_tools_result_text,
 )
@@ -184,21 +183,17 @@ def _initialize_session(
     A stateful transport has already assigned the id it returns in the
     ``Mcp-Session-Id`` header; ``ServerSession`` keeps it on its connection and
     exposes no public accessor. A stateless one has none: the session comes from
-    the ``Mcp-Session-Id`` the client sent, which it keeps sending, read the way
-    :func:`_resolve_ctx` reads it for every later request, or else from the token
-    our ASGI middleware minted for this response. stdio has neither and resolves
-    to this process's own session, as its later requests do."""
-    if _is_sse_request({"ctx": ctx}):
-        # The SSE transport keys its session on a query parameter that later
-        # requests do not resolve from: they land in this process's own session.
-        return None, None
+    the ``Mcp-Session-Id`` the client sent, which it keeps sending, or the SSE
+    transport's query parameter, or else from the token our ASGI middleware minted
+    for this response. stdio has neither and resolves to this process's own
+    session, as its later requests do."""
     connection = getattr(getattr(ctx, "session", None), "_connection", None)
     transport_session_id = getattr(connection, "session_id", None)
     if isinstance(transport_session_id, str) and transport_session_id:
         return transport_session_id, None
-    token, _, _, _, incoming = _resolve_ctx(ctx)
+    incoming = read_transport_session_id(ctx, handshake=True)
     if incoming:
-        return incoming, token
+        return incoming, decode_session_id(incoming)
     request = getattr(ctx, "request", None)
     return None, get_mcp_session(request) if request is not None else None
 
@@ -211,7 +206,9 @@ async def _record_v2_initialize(
         params = dict(ctx.params) if isinstance(ctx.params, Mapping) else {}
         await record_initialize(
             data,
-            session=await handshake_session(data, mcp_session_id, token),
+            session=await handshake_session(
+                data, mcp_session_id, token, over_http=get_request(ctx) is not None
+            ),
             params=params,
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
@@ -297,17 +294,6 @@ def _ctx_protocol_version(ctx: Any) -> Optional[str]:
         return None
 
 
-def _ctx_mcp_session_id(ctx: Any) -> Optional[str]:
-    """Best-effort transport session id (the ``Mcp-Session-Id`` header on the
-    legacy era — 2026-07-28 removed it). ``ctx.request`` carries the transport's
-    HTTP request when there is one; ``None`` on stdio.
-
-    Reuses the same header-bag normalisation and case-insensitive lookup the
-    public ``get_request_headers``/``read_mcp_session_header`` helpers already
-    provide, instead of a second hand-rolled ``ctx.request.headers`` read."""
-    return read_mcp_session_header(get_request_headers(ctx))
-
-
 def _is_internal_dispatch(ctx: Any) -> bool:
     """True when the SDK invoked this handler itself, not for a client request.
 
@@ -331,7 +317,7 @@ def _resolve_ctx(
     for a request, with token-carried identity backfilled for stateless pods."""
     client_name, client_version = _ctx_client_info(ctx)
     protocol_version = _ctx_protocol_version(ctx)
-    mcp_session_id = _ctx_mcp_session_id(ctx)
+    mcp_session_id = read_transport_session_id(ctx)
     token, client_name, client_version, protocol_version = resolve_session_and_client(
         mcp_session_id, client_name, client_version, protocol_version
     )

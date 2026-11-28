@@ -731,11 +731,9 @@ async def test_sse_transport_handshake_then_calls():
 # --- the middleware is per request and fail-safe -----------------------------------
 
 
-@pytest.mark.skipif(MCP_MAJOR >= 2, reason="mcp 2.x has no first-request fallback")
-async def test_a_route_without_the_middleware_keeps_the_fallback():
+async def test_a_route_without_the_middleware_gives_each_request_its_own_session():
     # One process, one server, two routes: the autowired app with the bound
-    # middleware, and the session manager mounted by hand without it. Each route
-    # reports its own handshakes, once.
+    # middleware, and the session manager mounted by hand without it.
     client = FakeClient()
     app, lifespan, server = make_pod(client)
     async with lifespan:
@@ -750,12 +748,14 @@ async def test_a_route_without_the_middleware_keeps_the_fallback():
                 await call_add(lb, headers, 4)
     await _flush()
 
-    inits = _events(client, "$mcp_initialize")
-    assert len(inits) == 2
+    inits = {e["properties"]["$session_id"] for e in _events(client, "$mcp_initialize")}
     calls = _events(client, "$mcp_tool_call")
-    assert {c["properties"]["$session_id"] for c in calls} == {
-        e["properties"]["$session_id"] for e in inits
-    }
+    wired, unwired = calls[:2], calls[2:]
+    (wired_session,) = {c["properties"]["$session_id"] for c in wired}
+    assert wired_session in inits
+    unwired_sessions = {c["properties"]["$session_id"] for c in unwired}
+    assert len(unwired_sessions - inits) == 2
+    assert {c["properties"]["$mcp_session_source"] for c in unwired} == {"generated"}
 
 
 async def test_handshake_session_id_keeps_its_public_contract():
