@@ -253,7 +253,10 @@ SSE_SPELLINGS = [
             None,
         ),
         *[
-            (_request_context({"session_id": spelling}, client_params=HANDSHAKE), SSE_ID)
+            (
+                _request_context({"session_id": spelling}, client_params=HANDSHAKE),
+                SSE_ID,
+            )
             for spelling in SSE_SPELLINGS
         ],
         (_request_context({"session_id": "not-a-uuid"}, client_params=HANDSHAKE), None),
